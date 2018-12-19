@@ -3,6 +3,7 @@ import
 
 const
   pageSize = 4096
+  debugHelpers = false
 
 type
   StreamReader = proc (bufferStart: ptr byte, bufferSize: int): int
@@ -29,6 +30,8 @@ type
 proc openFile*(filename: string): ByteStream =
   var memFile = memfiles.open(filename)
   result.head = cast[ptr byte](memFile.mem)
+  when debugHelpers:
+    result.bufferStart = result.head
   result.bufferEnd = result.head.shift memFile.size
   result.bufferEndPos = memFile.size
   result.closeStream = proc = close memFile
@@ -80,6 +83,11 @@ proc eob*(s: ByteStream): bool {.inline.} =
 proc peek*(s: ByteStream): byte {.inline.} =
   assert s.head != s.bufferEnd
   return s.head[]
+
+when debugHelpers:
+  proc showPosition*(s: ByteStream) =
+    echo "head at ", distance(s.bufferStart, s.head), "/",
+                     distance(s.bufferStart, s.bufferEnd)
 
 proc advance*(s: var ByteStream) =
   if s.head != s.bufferEnd:
