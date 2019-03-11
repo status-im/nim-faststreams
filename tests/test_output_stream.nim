@@ -4,7 +4,7 @@ import
 
 suite "output stream":
   test "string output":
-    var s = init StringOutputStream
+    var s = init OutputStream
     var altOutput = ""
 
     for i in 0 .. 1000:

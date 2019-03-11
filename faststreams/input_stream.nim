@@ -12,13 +12,18 @@ type
   CloseStreamProc = proc ()
 
   ByteStream* = object of RootObj
-    head: ptr byte
+    head*: ptr byte
     bufferSize: int
     bufferStart, bufferEnd: ptr byte
+    cursorsList: ptr StreamCursor
     reader: StreamReader
     asyncReader: AsyncStreamReader
     closeStream: CloseStreamProc
     bufferEndPos: int
+
+  StreamCursor* = object
+    head, bufferEnd: ptr byte
+    nextCursor: ptr StreamCursor
 
   BufferedStream*[size: static int] = object of ByteStream
     buffer: array[size, byte]
@@ -27,7 +32,12 @@ type
   UnicodeStream* = distinct ByteStream
   ObjectStream*[T] = distinct ByteStream
 
-proc openFile*(filename: string): ByteStream =
+  # TODO: ByteStreamVar should become a `var` short-lived pointer once this is supported
+  ByteStreamVar* = ref ByteStream
+  AsciiStreamVar* = ref AsciiStream
+
+proc openFile*(filename: string): ByteStreamVar =
+  new result
   var memFile = memfiles.open(filename)
   result.head = cast[ptr byte](memFile.mem)
   when debugHelpers:
@@ -46,12 +56,13 @@ proc init*(T: type ByteStream,
   result.reader = reader
   result.asyncReader = asyncReader
 
-template memoryStream*(mem: openarray[byte]): ByteStream =
-  ByteStream.init(mem)
+proc memoryStream*(mem: openarray[byte]): ByteStreamVar = # TODO: mark the result with `from mem`
+  new result
+  result[] = ByteStream.init(mem)
 
-template memoryStream*(str: string): ByteStream =
-  bind init
-  init(ByteStream, str.toOpenArrayByte(0, str.len - 1))
+proc memoryStream*(str: string): ByteStreamVar = # TODO: mark the result with `from str`
+  new result
+  result[] = init(ByteStream, str.toOpenArrayByte(0, str.len - 1))
 
 proc init*(T: type BufferedStream,
            reader = StreamReader(nil),
@@ -67,6 +78,15 @@ proc syncRead(s: var ByteStream): bool =
     s.bufferEnd = s.bufferStart.shift bytesRead
     s.bufferEndPos += bytesRead
     return false
+
+proc ensureBytes*(s: var ByteStream, n: int): bool =
+  if distance(s.head, s.bufferEnd) >= n:
+    return true
+
+  if s.reader == nil:
+    return false
+
+  doAssert false, "Multi-buffer reading will be implemented later"
 
 proc eof*(s: var ByteStream): bool =
   if s.head != s.bufferEnd:
@@ -98,6 +118,14 @@ proc advance*(s: var ByteStream) =
 proc read*(s: var ByteStream): byte =
   result = s.peek()
   advance s
+
+proc checkReadAhead(s: ByteStreamVar, n: int): ptr byte =
+  result = s.head
+  assert distance(s.head, s.bufferEnd) >= n
+  s.head = s.head.shift(n)
+
+template readBytes*(s: ByteStreamVar, n: int): auto =
+  makeOpenArray(checkReadAhead(s, n), n)
 
 proc next*(s: var ByteStream): Option[byte] =
   if not s.eof:

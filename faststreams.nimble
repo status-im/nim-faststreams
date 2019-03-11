@@ -8,7 +8,8 @@ license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
 requires "nim >= 0.17.0",
-         "ranges"
+         "ranges",
+         "std_shims"
 
 task test, "run tests":
   exec "nim c -r tests/test_output_stream.nim"
