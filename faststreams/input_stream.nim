@@ -101,7 +101,7 @@ proc eob*(s: ByteStream): bool {.inline.} =
   s.head != s.bufferEnd
 
 proc peek*(s: ByteStream): byte {.inline.} =
-  assert s.head != s.bufferEnd
+  doAssert s.head != s.bufferEnd
   return s.head[]
 
 when debugHelpers:
@@ -121,7 +121,7 @@ proc read*(s: var ByteStream): byte =
 
 proc checkReadAhead(s: ByteStreamVar, n: int): ptr byte =
   result = s.head
-  assert distance(s.head, s.bufferEnd) >= n
+  doAssert distance(s.head, s.bufferEnd) >= n
   s.head = s.head.shift(n)
 
 template readBytes*(s: ByteStreamVar, n: int): auto =
@@ -133,9 +133,9 @@ proc next*(s: var ByteStream): Option[byte] =
 
 proc bufferPos(s: ByteStream, pos: int): ptr byte =
   let shiftFromEnd = pos - s.bufferEndPos
-  assert shiftFromEnd < 0
+  doAssert shiftFromEnd < 0
   result = s.bufferEnd.shift shiftFromEnd
-  assert result >= s.bufferStart
+  doAssert result >= s.bufferStart
 
 proc pos*(s: ByteStream): int {.inline.} =
   s.bufferEndPos - distance(s.head, s.bufferEnd)
@@ -148,7 +148,7 @@ proc `[]`*(s: ByteStream, pos: int): byte {.inline.} =
 
 proc rewind*(s: var ByteStream, delta: int) =
   s.head = s.head.shift(-delta)
-  assert s.head >= s.bufferStart
+  doAssert s.head >= s.bufferStart
 
 proc rewindTo*(s: var ByteStream, pos: int) {.inline.} =
   s.head = s.bufferPos(pos)

@@ -91,7 +91,7 @@ proc getOutput*(s: OutputStreamVar, T: type string): string =
   else:
     result = newStringOfCap(s.pos)
     for page in s.pages:
-      assert page.delayedWrites == 0
+      doAssert page.delayedWrites == 0
       result.add page.buffer.toOpenArray(page.startOffset.int,
                                          page.buffer.len - 1)
 
@@ -110,7 +110,7 @@ proc flushDelayedPages*(s: OutputStreamVar) =
     # Send to output
 
 proc delayFixedSizeWrite*(s: OutputStreamVar, size: int): DelayedWriteCursor =
-  assert size < pageSize
+  doAssert size < pageSize
 
   let remainingBytesInPage = distance(s.head, s.bufferEnd)
   if size > remainingBytesInPage:
@@ -132,7 +132,7 @@ proc delayVarSizeWrite*(s: OutputStreamVar, maxSize: int): DelayedWriteCursor =
 
 proc decRef(x: var int16): int16 =
   result = x - 1
-  assert result >= 0
+  doAssert result >= 0
   x = result
 
 proc endWrite*(cursor: DelayedWriteCursor, data: openarray[byte]) =

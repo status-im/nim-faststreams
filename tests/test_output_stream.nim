@@ -17,5 +17,6 @@ suite "output stream":
       altOutput.add '\n'
 
     let streamOutput = s.getOutput
-    check streamOutput == altOutput
+    # without the cast, in nim-0.19.0: "Error: type mismatch: got <seq[byte], string>" (for the `==` proc)
+    check cast[string](streamOutput) == altOutput
 

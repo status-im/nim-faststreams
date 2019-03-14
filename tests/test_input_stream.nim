@@ -3,7 +3,7 @@ import
   ../faststreams
 
 suite "input stream":
-  test "string output":
+  test "string input":
     var input = repeat("1234 5678 90AB CDEF\n", 1000)
     var stream = memoryStream(input)
 

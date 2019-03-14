@@ -11,6 +11,11 @@ requires "nim >= 0.17.0",
          "ranges",
          "std_shims"
 
-task test, "run tests":
-  exec "nim c -r tests/test_output_stream.nim"
+import ospaths, strutils
+
+task test, "Run tests":
+  for filename in listFiles("tests"):
+    if filename.startsWith("tests" / "test_") and filename.endsWith(".nim"):
+      exec "nim c -r " & filename
+      rmFile filename[0..^5]
 
