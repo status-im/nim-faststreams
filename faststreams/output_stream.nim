@@ -65,7 +65,8 @@ proc append*(s: OutputStreamVar, b: byte) =
   s.head = shift(s.head, 1)
 
 template append*(s: OutputStreamVar, c: char) =
-  s.append byte(c)
+  bind append
+  append s, byte(c)
 
 proc append*(s: OutputStreamVar, bytes: openarray[byte]) =
   # TODO: this can use copyMem
