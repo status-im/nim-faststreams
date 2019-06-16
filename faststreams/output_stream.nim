@@ -136,6 +136,17 @@ proc decRef(x: var int16): int16 =
   doAssert result >= 0
   x = result
 
+proc totalBytesWrittenAfterCursor*(cursor: DelayedWriteCursor): int =
+  template s: auto = cursor.stream
+
+  let
+    spanningPagesTotal = (cursor.stream.pages.len - cursor.page) * pageSize
+    deductedFromFirstPage = distance(unsafeAddr s.pages[cursor.page].buffer[0],
+                                     cursor.bufferEnd)
+    deductedFromLastPage = distance(s.head, s.bufferEnd)
+
+  spanningPagesTotal - deductedFromFirstPage - deductedFromLastPage
+
 proc endWrite*(cursor: DelayedWriteCursor, data: openarray[byte]) =
   if data.len != distance(cursor.head, cursor.bufferEnd):
     doAssert false

@@ -2,21 +2,49 @@ import
   unittest,
   ../faststreams
 
+proc bytes(s: string): seq[byte] =
+  result = newSeqOfCap[byte](s.len)
+  for c in s: result.add byte(c)
+
+template bytes(c: char): byte = byte(c)
+template bytes(b: seq[byte]): seq[byte] = b
+
+proc repeat(b: byte, count: int): seq[byte] =
+  result = newSeq[byte](count)
+  for i in 0 ..< count: result[i] = b
+
 suite "output stream":
+  setup:
+    var stream = init OutputStream
+    var altOutput: seq[byte] = @[]
+
+  template output(val: auto) {.dirty.} =
+    stream.append val
+    altOutput.add bytes(val)
+
   test "string output":
-    var s = init OutputStream
-    var altOutput = ""
-
     for i in 0 .. 1000:
-      s.appendNumber i
-      s.append " bottles on the wall"
-      s.append byte('\n')
+      stream.appendNumber i
+      altOutput.add bytes($i)
 
-      altOutput.add $i
-      altOutput.add " bottles on the wall"
-      altOutput.add '\n'
+      output " bottles on the wall"
+      output '\n'
 
-    let streamOutput = s.getOutput
-    # without the cast, in nim-0.19.0: "Error: type mismatch: got <seq[byte], string>" (for the `==` proc)
-    check cast[string](streamOutput) == altOutput
+    check stream.getOutput == altOutput
 
+  test "delayed write":
+    output "initial output\n"
+    const delayedWriteContent = bytes "delayed write\n"
+
+    var cursor = stream.delayFixedSizeWrite(delayedWriteContent.len)
+    altOutput.add delayedWriteContent
+
+    var totalBytesWritten = 0
+    for i, count in [12, 342, 2121, 23, 1, 34012, 932]:
+      output repeat(byte(i), count)
+      totalBytesWritten += count
+      check cursor.totalBytesWrittenAfterCursor == totalBytesWritten
+
+    cursor.endWrite delayedWriteContent
+
+    check stream.getOutput == altOutput
