@@ -1,5 +1,6 @@
 import
-  unittest,
+  os, unittest,
+  ranges/ptr_arith,
   ../faststreams
 
 proc bytes(s: string): seq[byte] =
@@ -15,36 +16,66 @@ proc repeat(b: byte, count: int): seq[byte] =
 
 suite "output stream":
   setup:
-    var stream = init OutputStream
+    var memStream = OutputStream.init
     var altOutput: seq[byte] = @[]
+    var tempFilePath = getTempDir() / "faststreams_testfile"
+    var fileStream = OutputStream.init tempFilePath
+
+    const bufferSize = 1000000
+    var buffer = alloc(bufferSize)
+    var existingBufferStream = OutputStream.init(buffer, bufferSize)
+
+  teardown:
+    removeFile tempFilePath
 
   template output(val: auto) {.dirty.} =
-    stream.append val
     altOutput.add bytes(val)
 
-  test "string output":
-    for i in 0 .. 1000:
-      stream.appendNumber i
-      altOutput.add bytes($i)
+    memStream.append val
+    fileStream.append val
+    existingBufferStream.append val
 
+  template checkOutputsMatch =
+    fileStream.flush
+
+    let
+      fileContents = readFile(tempFilePath).string.bytes
+      memStreamContents = memStream.getOutput
+
+    check altOutput == memStreamContents
+    check altOutput == fileContents
+    check altOutput == makeOpenArray(cast[ptr byte](buffer),
+                                     existingBufferStream.pos)
+
+  test "no appends produce an empty output":
+    checkOutputsMatch()
+
+  test "string output":
+    for i in 0 .. 1:
+      output $i
       output " bottles on the wall"
       output '\n'
 
-    check stream.getOutput == altOutput
+    checkOutputsMatch()
 
   test "delayed write":
     output "initial output\n"
     const delayedWriteContent = bytes "delayed write\n"
 
-    var cursor = stream.delayFixedSizeWrite(delayedWriteContent.len)
+    var cursor = memStream.delayFixedSizeWrite(delayedWriteContent.len)
+    let cursorStart = memStream.pos
     altOutput.add delayedWriteContent
+
+    fileStream.append delayedWriteContent
+    existingBufferStream.append delayedWriteContent
 
     var totalBytesWritten = 0
     for i, count in [12, 342, 2121, 23, 1, 34012, 932]:
       output repeat(byte(i), count)
       totalBytesWritten += count
-      check cursor.totalBytesWrittenAfterCursor == totalBytesWritten
+      check memStream.pos - cursorStart == totalBytesWritten
 
     cursor.endWrite delayedWriteContent
 
-    check stream.getOutput == altOutput
+    checkOutputsMatch()
+

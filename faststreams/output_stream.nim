@@ -2,87 +2,152 @@ import
   deques, stew/ranges/ptr_arith, stew/strings
 
 type
-  OutputStreamVTable = tuple
-    prepareOutput: proc (s: ptr OutputStream, size: int) {.nimcall.}
-    finish: proc (s: ptr OutputStream) {.nimcall.}
-
   OutputPage = object
     buffer: string
-    startOffset: int16
-    delayedWrites: int16
+    startOffset: int
 
-  OutputStream* = object
+  OutputStream* = object of RootObj
     cursor: WriteCursor
     pages: Deque[OutputPage]
     endPos: int
-    vtable: ptr OutputStreamVTable
-    outputDevice: RootRef
+    vtable*: ptr OutputStreamVTable
+    outputDevice*: RootRef
+    extCursorsCount: int
+    pageSize: int
 
   WriteCursor* = object
     head, bufferEnd: ptr byte
     stream: OutputStreamVar
-    absPageIdx: int
+
+  FileOutput = ref object of RootObj
+    file: File
 
   OutputStreamVar* = ref OutputStream
 
   # Keep this temporary for backward-compatibility
   DelayedWriteCursor* = WriteCursor
+  VarSizeWriteCursor* = distinct WriteCursor
+
+  OutputStreamVTable* = object
+    writePage*: proc (s: OutputStreamVar, page: openarray[byte]) {.nimcall, gcsafe, raises: [IOError].}
+    flush*: proc (s: OutputStreamVar) {.nimcall, gcsafe, raises: [IOError].}
 
 const
   allocatorMetadata = 0 # TODO: Get this from Nim's allocator.
                         # The goal is to make perfect page-aligned allocations
-  pageSize = 4096 - allocatorMetadata - 1 # 1 byte for the null terminator
+  defaultPageSize = 4096 - allocatorMetadata - 1 # 1 byte for the null terminator
 
 func remainingBytesToWrite*(c: WriteCursor): int {.inline.} =
   distance(c.head, c.bufferEnd)
 
-template relToAbsPageIdx(s: OutputStreamVar, idx: int): int =
-  # original code: s.firstPage + idx
-  idx - s.cursor.absPageIdx - 1
-
-template absToRelPageIdx(s: OutputStreamVar, idx: int): int =
-  # original code: idx - s.firstPage
-  idx + s.cursor.absPageIdx + 1
-
-func relPage(c: WriteCursor): int {.inline.} =
-  c.stream.absToRelPageIdx c.absPageIdx
+proc flipPage(s: OutputStreamVar) =
+  s.cursor.head = cast[ptr byte](addr s.pages[s.pages.len - 1].buffer[0])
+  s.cursor.bufferEnd = cast[ptr byte](shift(s.cursor.head, s.pageSize))
+  s.endPos += s.pageSize
 
 proc addPage(s: OutputStreamVar) =
-  s.pages.addLast OutputPage(buffer: newString(pageSize),
-                             delayedWrites: 0,
+  s.pages.addLast OutputPage(buffer: newString(s.pageSize),
                              startOffset: 0)
-  s.cursor.head = cast[ptr byte](addr s.pages[s.pages.len - 1].buffer[0])
-  s.cursor.bufferEnd = cast[ptr byte](shift(s.cursor.head, pageSize))
-  s.endPos += pageSize
+  s.flipPage
 
-proc init*(T: type OutputStream): ref OutputStream =
+proc initWithSinglePage*(s: OutputStreamVar, pageSize: int) =
+  s.pageSize = pageSize
+  s.pages = initDeque[OutputPage]()
+  s.addPage
+  s.cursor.stream = s
+
+proc init*(T: type OutputStream,
+           pageSize = defaultPageSize): ref OutputStream =
   new result
-  result.vtable = nil
-  result.pages = initDeque[OutputPage]()
-  result.addPage()
-  result.cursor.absPageIdx = -1
+  result.initWithSinglePage pageSize
+
+let FileStreamVTable = OutputStreamVTable(
+  writePage: proc (s: OutputStreamVar, data: openarray[byte]) {.nimcall, gcsafe.} =
+    var output = FileOutput(s.outputDevice)
+    var written = output.file.writeBuffer(unsafeAddr data[0], data.len)
+    if written != data.len:
+      raise newException(IOError, "Failed to write OutputStream page.")
+  ,
+  flush: proc (s: OutputStreamVar) {.nimcall, gcsafe.} =
+    var output = FileOutput(s.outputDevice)
+    flushFile output.file
+)
+
+proc init*(T: type OutputStream,
+           filename: string,
+           pageSize = defaultPageSize): ref OutputStream =
+  new result
+  result.outputDevice = FileOutput(file: open(filename, fmWrite))
+  result.vtable = unsafeAddr FileStreamVTable
+  result.initWithSinglePage pageSize
+
+proc init*(T: type OutputStream,
+           buffer: pointer, len: int): ref OutputStream =
+  new result
+  let buffer = cast[ptr byte](buffer)
+  result.cursor.head = buffer
+  result.cursor.bufferEnd = buffer.shift(len)
   result.cursor.stream = result
+  result.endPos = len
 
 proc pos*(s: OutputStreamVar): int =
   s.endPos - s.cursor.remainingBytesToWrite
 
+proc safeWritePage(s: OutputStreamVar, data: openarray[byte]) {.inline.} =
+  if data.len > 0: s.vtable.writePage(s, data)
+
+proc writePages(s: OutputStreamVar, skipLast = 0) =
+  assert s.vtable != nil
+  for i in 0 ..< s.pages.len - skipLast:
+    s.safeWritePage s.pages[i].buffer.toOpenArrayByte(0, s.pages[i].buffer.len - 1)
+
+proc writePartialPage(s: OutputStreamVar, page: var OutputPage) =
+  assert s.vtable != nil
+  let
+    unwrittenBytes = s.cursor.remainingBytesToWrite
+    pageEndPos = s.pageSize - unwrittenBytes - 1
+    pageStartPos = page.startOffset
+
+  s.safeWritePage page.buffer.toOpenArrayByte(pageStartPos, pageEndPos)
+  s.endPos -= unwrittenBytes
+
+  page.startOffset = 0
+  s.flipPage
+
+proc flush*(s: OutputStreamVar) =
+  doAssert s.extCursorsCount == 0
+  if s.vtable != nil:
+    # We write all pages except the last one
+    s.writePages(skipLast = 1)
+    # Then we erase them from the list
+    s.pages.shrink(fromFirst = s.pages.len - 1)
+    # Then we write the current page, which is probably incomplete
+    s.writePartialPage s.pages[0]
+    # Finally, we flush
+    s.vtable.flush(s)
+
 proc tryFlushing(s: OutputStreamVar) =
-  # TODO This is relevant when writing to files and layered streams (e.g. zip)
+  # Pre-conditions:
+  #  * The cursor has reached the current buffer end
+  #
   # Post-conditions:
   #  * All completed pages are written
   #  * There is a fresh page ready for writing at the top
   #    (we can reuse a previously existing page for this)
   #  * The head and bufferEnd pointers point to the new top page
-  s.addPage()
-
-template isDelayedWrite(c: WriteCursor): bool =
-  c.absPageIdx >= 0
+  if s.vtable != nil and s.extCursorsCount == 0:
+    s.writePages
+    s.pages.shrink(fromFirst = s.pages.len - 1)
+    s.pages[0].startOffset = 0
+    s.flipPage
+  else:
+    s.addPage
 
 proc append*(c: var WriteCursor, b: byte) =
   if c.head == c.bufferEnd:
-    # Delayed write cursors are not allowed to reach
-    # the end of the buffer and allocate new pages:
-    doAssert(not c.isDelayedWrite)
+    # Only the original stream cursor is allowed to write
+    # past its buffer end by allocating new memory pages:
+    doAssert addr(c) == addr(c.stream.cursor)
     c.stream.tryFlushing()
 
   c.head[] = b
@@ -119,18 +184,16 @@ template appendMemCopy*(s: OutputStreamVar, value: auto) =
   bind append
   s.cursor.append value
 
-proc flush*(s: OutputStreamVar) =
-  s.vtable.finish(addr s[])
-
 proc getOutput*(s: OutputStreamVar, T: type string): string =
-  s.pages[s.pages.len - 1].buffer.setLen(pageSize - s.cursor.remainingBytesToWrite)
+  doAssert s.vtable == nil and s.extCursorsCount == 0
+
+  s.pages[s.pages.len - 1].buffer.setLen(s.pageSize - s.cursor.remainingBytesToWrite)
 
   if s.pages.len == 1 and s.pages[0].startOffset == 0:
     result.swap s.pages[0].buffer
   else:
     result = newStringOfCap(s.pos)
     for page in s.pages:
-      doAssert page.delayedWrites == 0
       result.add page.buffer.toOpenArray(page.startOffset.int,
                                          page.buffer.len - 1)
 
@@ -142,76 +205,53 @@ proc getOutput*(s: OutputStreamVar): seq[byte] =
   # Turning this proc into a template creates problems at the moment.
   s.getOutput(seq[byte])
 
-proc flushDelayedPages*(s: OutputStreamVar) =
-  for i in 0 .. s.pages.len - 2:
-    if s.pages[i].delayedWrites > 0: return
-    # TODO:
-    # Send to output
+proc finishPageEarly(s: OutputStreamVar, unwrittenBytes: int) {.inline.} =
+  s.pages[s.pages.len - 1].buffer.setLen(s.pageSize - unwrittenBytes)
+  s.endPos -= unwrittenBytes
+  s.tryFlushing()
 
-proc delayFixedSizeWrite*(s: OutputStreamVar, size: int): WriteCursor =
-  doAssert size < pageSize
-
-  let remainingBytesInPage = s.cursor.remainingBytesToWrite
-  if size > remainingBytesInPage:
-    s.pages[s.pages.len - 1].buffer.setLen(pageSize - remainingBytesInPage)
-    s.endPos -= remainingBytesInPage
-    s.tryFlushing()
-
-  let curPageIdx = s.pages.len - 1
-  inc s.pages[curPageIdx].delayedWrites
+proc createCursor(s: OutputStreamVar, size: int): WriteCursor =
+  inc s.extCursorsCount
 
   result = WriteCursor(head: s.cursor.head,
                        bufferEnd: s.cursor.head.shift(size),
-                       absPageIdx: s.relToAbsPageIdx(curPageIdx),
                        stream: s)
 
   s.cursor.head = result.bufferEnd
 
-proc delayVarSizeWrite*(s: OutputStreamVar, maxSize: int): WriteCursor =
-  # TODO
-  discard
+proc delayFixedSizeWrite*(s: OutputStreamVar, size: int): WriteCursor =
+  let remainingBytesInPage = s.cursor.remainingBytesToWrite
+  if size > remainingBytesInPage:
+    doAssert size < s.pageSize
+    s.finishPageEarly remainingBytesInPage
 
-proc decRef(x: var int16): int16 =
-  result = x - 1
-  doAssert result >= 0
-  x = result
+  s.createCursor(size)
 
-proc totalBytesWrittenAfterCursor*(cursor: WriteCursor): int =
-  template s: auto = cursor.stream
+proc delayVarSizeWrite*(s: OutputStreamVar, maxSize: int): VarSizeWriteCursor =
+  doAssert maxSize < s.pageSize
+  s.finishPageEarly s.cursor.remainingBytesToWrite
+  VarSizeWriteCursor s.createCursor(maxSize)
 
-  let
-    relPageIdx = cursor.relPage
-    spanningPagesTotal = (cursor.stream.pages.len - relPageIdx) * pageSize
-    deductedFromFirstPage = distance(unsafeAddr s.pages[relPageIdx].buffer[0],
-                                     cursor.bufferEnd)
-    deductedFromLastPage = s.cursor.remainingBytesToWrite
-
-  spanningPagesTotal - deductedFromFirstPage - deductedFromLastPage
+proc dispose*(cursor: WriteCursor) =
+  doAssert cursor.stream.extCursorsCount > 0
+  dec cursor.stream.extCursorsCount
 
 proc endWrite*(cursor: WriteCursor, data: openarray[byte]) =
   doAssert data.len == cursor.remainingBytesToWrite
-
   copyMem(cursor.head, unsafeAddr data[0], data.len)
-  if cursor.stream.pages[cursor.relPage].delayedWrites.decRef <= 0:
-    cursor.stream.flushDelayedPages()
+  dispose cursor
 
-# Any stream
+proc endWrite*(c: VarSizeWriteCursor, data: openarray[byte]) =
+  template cursor: auto = WriteCursor(c)
 
-proc appendNumberImpl(s: OutputStreamVar, number: BiggestInt) =
-  # TODO: don't allocate
-  s.append $number
+  for page in mitems(cursor.stream.pages):
+    if unsafeAddr(page.buffer[0]) == cursor.head:
+      let overestimatedBytes = remainingBytesToWrite(cursor) - data.len
+      doAssert overestimatedBytes >= 0
+      page.startOffset = overestimatedBytes
+      copyMem(cursor.head.shift(overestimatedBytes), unsafeAddr data[0], data.len)
+      dispose cursor
+      return
 
-proc appendNumberImpl(s: OutputStreamVar, number: BiggestUInt) =
-  # TODO: don't allocate
-  s.append $number
-
-template toBiggestRepr(i: SomeUnsignedInt): BiggestUInt =
-  BiggestUInt(i)
-
-template toBiggestRepr(i: SomeSignedInt): BiggestInt =
-  BiggestInt(i)
-
-template appendNumber*(s: OutputStreamVar, i: SomeInteger) =
-  # TODO: specify radix/base
-  appendNumberImpl(s, toBiggestRepr(i))
+  doAssert false
 
