@@ -8,8 +8,7 @@ license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
 requires "nim >= 0.17.0",
-         "ranges",
-         "std_shims"
+         "stew"
 
 task test, "Run tests":
   for filename in [

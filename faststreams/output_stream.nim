@@ -1,5 +1,5 @@
 import
-  deques, ranges/ptr_arith, std_shims/strings
+  deques, stew/ranges/ptr_arith, stew/strings
 
 type
   OutputStreamVTable = tuple

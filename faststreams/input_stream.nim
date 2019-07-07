@@ -1,5 +1,5 @@
 import
-  memfiles, options, ranges/ptr_arith
+  memfiles, options, stew/ranges/ptr_arith
 
 const
   pageSize = 4096

@@ -1,5 +1,5 @@
 import
-  unittest, strutils, ranges/ptr_arith,
+  unittest, strutils, stew/ranges/ptr_arith,
   ../faststreams
 
 suite "input stream":
