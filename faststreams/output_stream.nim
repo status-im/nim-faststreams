@@ -14,6 +14,7 @@ type
     outputDevice*: RootRef
     extCursorsCount: int
     pageSize: int
+    maxWriteSize*: int
 
   WriteCursor* = object
     head, bufferEnd: ptr byte
@@ -29,15 +30,29 @@ type
   VarSizeWriteCursor* = distinct WriteCursor
 
   OutputStreamVTable* = object
-    writePage*: proc (s: OutputStreamVar, page: openarray[byte]) {.nimcall, gcsafe, raises: [IOError].}
-    flush*: proc (s: OutputStreamVar) {.nimcall, gcsafe, raises: [IOError].}
+    writePage*: proc (s: OutputStreamVar, page: openarray[byte])
+                     {.nimcall, gcsafe, raises: [IOError, Defect] .}
+
+    flush*: proc (s: OutputStreamVar)
+                 {.nimcall, gcsafe, raises: [IOError, Defect].}
 
 const
   allocatorMetadata = 0 # TODO: Get this from Nim's allocator.
                         # The goal is to make perfect page-aligned allocations
   defaultPageSize = 4096 - allocatorMetadata - 1 # 1 byte for the null terminator
 
-func remainingBytesToWrite*(c: WriteCursor): int {.inline.} =
+func canExtendOutput(c: var WriteCursor): bool {.inline.} =
+  # ATTENTION!
+  # The `var` modifier is intentional here. Nim tries to optimise small values
+  # such as WriteCursors by copying them instead of passing them by reference.
+  # This will break the address checks below.
+  #
+  # Only the original stream cursor is allowed to write past its buffer end by
+  # allocating new memory pages. Streams writing to pre-allocated existing
+  # buffers cannot be grown as well:
+  unsafeAddr(c) == unsafeAddr(c.stream.cursor) and c.stream.pageSize > 0
+
+func remainingBytesToWrite*(c: var WriteCursor): int {.inline.} =
   distance(c.head, c.bufferEnd)
 
 proc flipPage(s: OutputStreamVar) =
@@ -50,8 +65,9 @@ proc addPage(s: OutputStreamVar) =
                              startOffset: 0)
   s.flipPage
 
-proc initWithSinglePage*(s: OutputStreamVar, pageSize: int) =
+proc initWithSinglePage*(s: OutputStreamVar, pageSize, maxWriteSize: int) =
   s.pageSize = pageSize
+  s.maxWriteSize = maxWriteSize
   s.pages = initDeque[OutputPage]()
   s.addPage
   s.cursor.stream = s
@@ -59,7 +75,7 @@ proc initWithSinglePage*(s: OutputStreamVar, pageSize: int) =
 proc init*(T: type OutputStream,
            pageSize = defaultPageSize): ref OutputStream =
   new result
-  result.initWithSinglePage pageSize
+  result.initWithSinglePage pageSize, high(int)
 
 let FileStreamVTable = OutputStreamVTable(
   writePage: proc (s: OutputStreamVar, data: openarray[byte]) {.nimcall, gcsafe.} =
@@ -79,7 +95,7 @@ proc init*(T: type OutputStream,
   new result
   result.outputDevice = FileOutput(file: open(filename, fmWrite))
   result.vtable = unsafeAddr FileStreamVTable
-  result.initWithSinglePage pageSize
+  result.initWithSinglePage pageSize, high(int)
 
 proc init*(T: type OutputStream,
            buffer: pointer, len: int): ref OutputStream =
@@ -126,7 +142,13 @@ proc flush*(s: OutputStreamVar) =
     # Finally, we flush
     s.vtable.flush(s)
 
-proc tryFlushing(s: OutputStreamVar) =
+proc writePendingPagesAndLeaveOne(s: OutputStreamVar) {.inline.} =
+  s.writePages
+  s.pages.shrink(fromFirst = s.pages.len - 1)
+  s.pages[0].startOffset = 0
+  s.flipPage
+
+proc tryFlushing(s: OutputStreamVar) {.inline.} =
   # Pre-conditions:
   #  * The cursor has reached the current buffer end
   #
@@ -136,18 +158,13 @@ proc tryFlushing(s: OutputStreamVar) =
   #    (we can reuse a previously existing page for this)
   #  * The head and bufferEnd pointers point to the new top page
   if s.vtable != nil and s.extCursorsCount == 0:
-    s.writePages
-    s.pages.shrink(fromFirst = s.pages.len - 1)
-    s.pages[0].startOffset = 0
-    s.flipPage
+    s.writePendingPagesAndLeaveOne
   else:
     s.addPage
 
 proc append*(c: var WriteCursor, b: byte) =
   if c.head == c.bufferEnd:
-    # Only the original stream cursor is allowed to write
-    # past its buffer end by allocating new memory pages:
-    doAssert addr(c) == addr(c.stream.cursor)
+    doAssert c.canExtendOutput
     c.stream.tryFlushing()
 
   c.head[] = b
@@ -157,15 +174,113 @@ template append*(c: var WriteCursor, x: char) =
   bind append
   c.append byte(x)
 
-proc append*(c: var WriteCursor, bytes: openarray[byte]) =
-  # TODO: this can use copyMem
-  for b in bytes:
-    c.append b
+proc writeDataAsPages(s: OutputStreamVar, data: ptr byte, dataLen: int) =
+  var
+    data = data
+    dataLen = dataLen
 
-proc append*(c: var WriteCursor, chars: openarray[char]) =
-  # TODO: this can use copyMem
-  for x in chars:
-    c.append byte(x)
+  if dataLen < s.maxWriteSize:
+    s.vtable.writePage(s, makeOpenArray(data, dataLen))
+    s.endPos += dataLen
+    return
+
+  while dataLen > s.pageSize:
+    s.vtable.writePage(s, makeOpenArray(data, s.pageSize))
+    data = shift(data, s.pageSize)
+    dec dataLen, s.pageSize
+    s.endPos += s.pageSize
+
+  copyMem(s.cursor.head, data, dataLen)
+  s.cursor.head = shift(s.cursor.head, dataLen)
+
+proc newStringFromBytes(input: ptr byte, inputLen: int): string =
+  assert inputLen > 0
+  result = newString(inputLen)
+  copyMem(addr result[0], input, inputLen)
+
+proc handleLongAppend*(c: var WriteCursor, bytes: openarray[byte]) =
+  var
+    pageRemaining = c.remainingBytesToWrite
+    inputPos = unsafeAddr bytes[0]
+    inputLen = bytes.len
+
+  template reduceInput(delta: int) =
+    inputPos = shift(inputPos, delta)
+    inputLen -= delta
+
+  # Since the input is longer, we first make sure that the top-most
+  # page is filled to the top:
+  doAssert c.canExtendOutput
+  copyMem(c.head, inputPos, pageRemaining)
+  reduceInput pageRemaining
+
+  if c.stream.vtable != nil and c.stream.extCursorsCount == 0:
+    # This stream has an output device and we are ready to flush
+    # all the pending pages. One fresh page will be left on top.
+    # The input is yet to be written:
+    c.stream.writePendingPagesAndLeaveOne
+    # This will directly send our input to the output device.
+    # Since the output device has a preference for pageSize and
+    # maxWriteSize, we'll send some full pages to it and then
+    # some bytes will be written to the fresh page created above:
+    c.stream.writeDataAsPages(inputPos, inputLen)
+  else:
+    # We are not ready to flush, so we must create pending pages.
+    # We'll try to create them as large as possible:
+    let maxPageSize = c.stream.maxWriteSize
+
+    # We know how much the endPos will advance, but please note that
+    # it may be corrected later if we end up writing a portion of the
+    # input to an incomplete page:
+    c.stream.endPos += inputLen
+
+    # Try to create big pages until we have more data:
+    while inputLen > maxPageSize:
+      c.stream.pages.addLast OutputPage(
+        buffer: newStringFromBytes(inputPos, maxPageSize),
+        startOffset: 0)
+      reduceInput maxPageSize
+
+    # Here the remaining input is smaller than a max page, but it may be
+    # still larger than a regular page. If this is the case, we just create
+    # one final oversized page and then we leave one empty fresh page where
+    # the writing will continue:
+    if inputLen > c.stream.pageSize:
+      c.stream.pages.addLast OutputPage(
+        buffer: newStringFromBytes(inputPos, inputLen),
+        startOffset: 0)
+      c.stream.addPage
+    else:
+      # We don't have enough remaining bytes for a full page, so we'll just
+      # allocate a new empty page and we'll write the remaining input there.
+      # This will also reset the cursor to the start of the page:
+      c.stream.addPage
+      copyMem(c.head, inputPos, inputLen)
+      c.head = shift(c.head, inputLen)
+      # We must correct endPos, because it must mark the end of the top-most
+      # page. Since `addPage` advances the endPos as well and our remaining
+      # input was written to the newly created page, our initial increase of
+      # endPos was overestimated:
+      c.stream.endPos -= inputLen
+
+proc append*(c: var WriteCursor, bytes: openarray[byte]) {.inline.} =
+  # We have a short inlinable function handling the case when the input is
+  # short enough to fit in the current page. We'll keep buffering until the
+  # page is full:
+  let
+    pageRemaining = c.remainingBytesToWrite
+    inputPos = unsafeAddr bytes[0]
+    inputLen = bytes.len
+
+  if inputLen <= pageRemaining:
+    copyMem(c.head, inputPos, inputLen)
+    c.head = shift(c.head, inputLen)
+  else:
+    handleLongAppend(c, bytes)
+
+proc append*(c: var WriteCursor, chars: openarray[char]) {.inline.} =
+  var charsStart = unsafeAddr chars[0]
+  c.append makeOpenArray(cast[ptr byte](charsStart), chars.len)
 
 template appendMemCopy*(c: var WriteCursor, value: auto) =
   bind append
@@ -185,7 +300,7 @@ template appendMemCopy*(s: OutputStreamVar, value: auto) =
   s.cursor.append value
 
 proc getOutput*(s: OutputStreamVar, T: type string): string =
-  doAssert s.vtable == nil and s.extCursorsCount == 0
+  doAssert s.vtable == nil and s.extCursorsCount == 0 and s.pageSize > 0
 
   s.pages[s.pages.len - 1].buffer.setLen(s.pageSize - s.cursor.remainingBytesToWrite)
 
@@ -232,21 +347,21 @@ proc delayVarSizeWrite*(s: OutputStreamVar, maxSize: int): VarSizeWriteCursor =
   s.finishPageEarly s.cursor.remainingBytesToWrite
   VarSizeWriteCursor s.createCursor(maxSize)
 
-proc dispose*(cursor: WriteCursor) =
+proc dispose*(cursor: var WriteCursor) =
   doAssert cursor.stream.extCursorsCount > 0
   dec cursor.stream.extCursorsCount
 
-proc endWrite*(cursor: WriteCursor, data: openarray[byte]) =
+proc endWrite*(cursor: var WriteCursor, data: openarray[byte]) =
   doAssert data.len == cursor.remainingBytesToWrite
   copyMem(cursor.head, unsafeAddr data[0], data.len)
   dispose cursor
 
-proc endWrite*(c: VarSizeWriteCursor, data: openarray[byte]) =
+proc endWrite*(c: var VarSizeWriteCursor, data: openarray[byte]) =
   template cursor: auto = WriteCursor(c)
 
   for page in mitems(cursor.stream.pages):
     if unsafeAddr(page.buffer[0]) == cursor.head:
-      let overestimatedBytes = remainingBytesToWrite(cursor) - data.len
+      let overestimatedBytes = cursor.remainingBytesToWrite - data.len
       doAssert overestimatedBytes >= 0
       page.startOffset = overestimatedBytes
       copyMem(cursor.head.shift(overestimatedBytes), unsafeAddr data[0], data.len)
