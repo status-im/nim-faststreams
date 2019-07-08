@@ -1,6 +1,6 @@
 import
   os, unittest,
-  ranges/ptr_arith,
+  stew/ranges/ptr_arith,
   ../faststreams
 
 proc bytes(s: string): seq[byte] =
