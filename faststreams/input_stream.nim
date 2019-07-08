@@ -36,6 +36,8 @@ type
   ByteStreamVar* = ref ByteStream
   AsciiStreamVar* = ref AsciiStream
 
+  InputStreamVar* = ref ByteStream
+
 proc openFile*(filename: string): ByteStreamVar =
   new result
   var memFile = memfiles.open(filename)
@@ -68,6 +70,10 @@ proc init*(T: type BufferedStream,
            reader = StreamReader(nil),
            asyncReader = AsyncStreamReader(nil)): BufferedStream =
   result.init result.buffer, reader, asyncReader
+
+proc endPos*(s: InputStreamVar): int =
+  # TODO This needs to use a VTable for `system.File` based streams
+  s.bufferEndPos
 
 proc syncRead(s: var ByteStream): bool =
   let bytesRead = s.reader(s.bufferStart, s.bufferSize)
