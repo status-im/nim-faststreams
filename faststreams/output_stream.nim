@@ -7,7 +7,7 @@ type
     startOffset: int
 
   OutputStream* = object of RootObj
-    cursor: WriteCursor
+    cursor*: WriteCursor
     pages: Deque[OutputPage]
     endPos: int
     vtable*: ptr OutputStreamVTable
@@ -285,7 +285,8 @@ proc append*(c: var WriteCursor, chars: openarray[char]) {.inline.} =
 template appendMemCopy*(c: var WriteCursor, value: auto) =
   bind append
   # TODO: add a check that this is a trivial type
-  c.append makeOpenArray(cast[ptr byte](unsafeAddr(value)), sizeof(value))
+  let valueAddr = unsafeAddr value
+  c.append makeOpenArray(cast[ptr byte](valueAddr), sizeof(value))
 
 template append*(c: var WriteCursor, str: string) =
   bind append
