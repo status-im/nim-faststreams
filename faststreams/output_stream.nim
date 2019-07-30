@@ -223,16 +223,17 @@ proc writeDataAsPages(s: OutputStreamVar, data: ptr byte, dataLen: int) =
     data = data
     dataLen = dataLen
 
-  if dataLen < s.maxWriteSize:
-    s.vtable.writePage(s, makeOpenArray(data, dataLen))
-    s.endPos += dataLen
-    return
+  if dataLen > s.pageSize:
+    if dataLen < s.maxWriteSize:
+      s.vtable.writePage(s, makeOpenArray(data, dataLen))
+      s.endPos += dataLen
+      return
 
-  while dataLen > s.pageSize:
-    s.vtable.writePage(s, makeOpenArray(data, s.pageSize))
-    data = shift(data, s.pageSize)
-    dec dataLen, s.pageSize
-    s.endPos += s.pageSize
+    while dataLen > s.pageSize:
+      s.vtable.writePage(s, makeOpenArray(data, s.pageSize))
+      data = shift(data, s.pageSize)
+      dec dataLen, s.pageSize
+      s.endPos += s.pageSize
 
   copyMem(s.cursor.head, data, dataLen)
   s.cursor.head = shift(s.cursor.head, dataLen)
