@@ -6,7 +6,7 @@ const
   debugHelpers = false
 
 type
-  StreamReader = proc (bufferStart: ptr byte, bufferSize: int): int
+  StreamReader = proc (bufferStart: ptr byte, bufferSize: int): int {.gcsafe.}
   # TODO: use openarray once it's supported
   AsyncStreamReader = StreamReader # proc (bufferStart: ptr byte, bufferSize: int): Future[int]
   CloseStreamProc = proc ()
