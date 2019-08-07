@@ -55,6 +55,7 @@ proc init*(T: type ByteStream,
   # TODO: the result should use `from mem` once it's supported
   result.head = unsafeAddr mem[0]
   result.bufferEnd = result.head.shift mem.len
+  result.bufferEndPos = mem.len
   result.reader = reader
   result.asyncReader = asyncReader
 
@@ -73,7 +74,7 @@ proc init*(T: type BufferedStream,
 
 proc endPos*(s: InputStreamVar): int =
   # TODO This needs to use a VTable for `system.File` based streams
-  s.bufferEndPos
+  return s.bufferEndPos
 
 proc syncRead(s: var ByteStream): bool =
   let bytesRead = s.reader(s.bufferStart, s.bufferSize)

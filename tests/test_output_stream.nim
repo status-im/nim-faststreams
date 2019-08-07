@@ -80,7 +80,7 @@ suite "output stream":
       totalBytesWritten += count
       check memStream.pos - cursorStart == totalBytesWritten
 
-    cursor.endWrite delayedWriteContent
+    cursor.writeAndFinalize delayedWriteContent
 
     checkOutputsMatch()
 
@@ -116,7 +116,7 @@ suite "output stream":
         delayedWrites[i].written += toWrite
 
         if remaining - toWrite == 0:
-          dispose delayedWrites[i].cursor
+          finalize delayedWrites[i].cursor
           if i != delayedWrites.len - 1:
             swap(delayedWrites[i], delayedWrites[^1])
           delayedWrites.setLen(delayedWrites.len - 1)
@@ -141,7 +141,7 @@ suite "output stream":
     for dw in mitems(delayedWrites):
       let remaining = dw.content.len - dw.written
       dw.cursor.append dw.content[dw.written ..< dw.written + remaining]
-      dispose dw.cursor
+      finalize dw.cursor
 
     # The final outputs are the same
     check altOutput == memStream.getOutput
