@@ -6,7 +6,9 @@ type
     buffer: string
     startOffset: int
 
-  OutputStream* = object
+  # somehow casting outputDevice to
+  # OutputStreamVar requires RootObj
+  OutputStream* = object of RootObj
     cursor*: WriteCursor
     pages: Deque[OutputPage]
     endPos: int
