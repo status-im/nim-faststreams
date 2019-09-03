@@ -58,7 +58,7 @@ suite "output stream":
   test "append zero length slice":
     output ""
     checkOutputsMatch()
-  
+
   test "string output":
     for i in 0 .. 1:
       output $i
@@ -150,3 +150,14 @@ suite "output stream":
     # The final outputs are the same
     check altOutput == memStream.getOutput
 
+  test "nim odd behavior":
+    # discovered in status-im/nim-snappy#2
+    proc encode(s: OutputStreamVar) =
+      check true
+
+    proc abc(s: OutputStreamVar) =
+      OutputStreamVar(s.outputDevice).encode
+      check true
+
+    var os = new OutputStream
+    os.abc()
