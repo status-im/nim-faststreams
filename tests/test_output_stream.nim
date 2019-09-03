@@ -55,6 +55,10 @@ suite "output stream":
   test "no appends produce an empty output":
     checkOutputsMatch()
 
+  test "append zero length slice":
+    output ""
+    checkOutputsMatch()
+  
   test "string output":
     for i in 0 .. 1:
       output $i
