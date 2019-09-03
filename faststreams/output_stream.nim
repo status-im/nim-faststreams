@@ -356,6 +356,7 @@ proc append*(c: var WriteCursor, bytes: openarray[byte]) {.inline.} =
     pageRemaining = c.runway
     inputLen = bytes.len
 
+  if inputLen == 0: return
   if inputLen <= pageRemaining:
     copyMem(c.head, unsafeAddr bytes[0], inputLen)
     c.head = shift(c.head, inputLen)
