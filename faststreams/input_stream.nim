@@ -1,8 +1,8 @@
 import
-  memfiles, options, stew/ranges/ptr_arith
+  memfiles, options, stew/[ptrops, ranges/ptr_arith]
 
 const
-  pageSize = 4096
+  # pageSize = 4096
   debugHelpers = false
 
 type
@@ -44,7 +44,7 @@ proc openFile*(filename: string): ByteStreamVar =
   result.head = cast[ptr byte](memFile.mem)
   when debugHelpers:
     result.bufferStart = result.head
-  result.bufferEnd = result.head.shift memFile.size
+  result.bufferEnd = offset(result.head, memFile.size)
   result.bufferEndPos = memFile.size
   result.closeStream = proc = close memFile
 
@@ -54,7 +54,7 @@ proc init*(T: type ByteStream,
            asyncReader = AsyncStreamReader(nil)): ByteStream =
   # TODO: the result should use `from mem` once it's supported
   result.head = unsafeAddr mem[0]
-  result.bufferEnd = result.head.shift mem.len
+  result.bufferEnd = offset(result.head, mem.len)
   result.bufferEndPos = mem.len
   result.reader = reader
   result.asyncReader = asyncReader
@@ -82,7 +82,7 @@ proc syncRead(s: var ByteStream): bool =
     s.reader = nil
     return true
   else:
-    s.bufferEnd = s.bufferStart.shift bytesRead
+    s.bufferEnd = offset(s.bufferStart, bytesRead)
     s.bufferEndPos += bytesRead
     return false
 
@@ -118,7 +118,7 @@ when debugHelpers:
 
 proc advance*(s: var ByteStream) =
   if s.head != s.bufferEnd:
-    s.head = s.head.shift 1
+    s.head = offset(s.head, 1)
   elif s.reader != nil:
     discard s.syncRead()
 
@@ -129,7 +129,7 @@ proc read*(s: var ByteStream): byte =
 proc checkReadAhead(s: ByteStreamVar, n: int): ptr byte =
   result = s.head
   doAssert distance(s.head, s.bufferEnd) >= n
-  s.head = s.head.shift(n)
+  s.head = offset(s.head, n)
 
 template readBytes*(s: ByteStreamVar, n: int): auto =
   makeOpenArray(checkReadAhead(s, n), n)
@@ -139,9 +139,9 @@ proc next*(s: var ByteStream): Option[byte] =
     result = some s.read()
 
 proc bufferPos(s: ByteStream, pos: int): ptr byte =
-  let shiftFromEnd = pos - s.bufferEndPos
-  doAssert shiftFromEnd < 0
-  result = s.bufferEnd.shift shiftFromEnd
+  let offsetFromEnd = pos - s.bufferEndPos
+  doAssert offsetFromEnd < 0
+  result = offset(s.bufferEnd, offsetFromEnd)
   doAssert result >= s.bufferStart
 
 proc pos*(s: ByteStream): int {.inline.} =
@@ -154,7 +154,7 @@ proc `[]`*(s: ByteStream, pos: int): byte {.inline.} =
   s.bufferPos(pos)[]
 
 proc rewind*(s: var ByteStream, delta: int) =
-  s.head = s.head.shift(-delta)
+  s.head = offset(s.head, -delta)
   doAssert s.head >= s.bufferStart
 
 proc rewindTo*(s: var ByteStream, pos: int) {.inline.} =

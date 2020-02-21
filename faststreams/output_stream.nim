@@ -1,5 +1,5 @@
 import
-  deques, stew/ranges/ptr_arith, stew/strings
+  deques, stew/[ptrops, strings, ranges/ptr_arith]
 
 type
   OutputPage = object
@@ -52,7 +52,7 @@ const
 
 proc createWriteCursor*[R, T](x: var array[R, T]): WriteCursor =
   let startAddr = cast[ptr byte](addr x[0])
-  WriteCursor(head: startAddr, bufferEnd: shift(startAddr, sizeof x))
+  WriteCursor(head: startAddr, bufferEnd: offset(startAddr, sizeof x))
 
 template canExtendOutput(s: OutputStreamVar): bool =
   # Streams writing to pre-allocated existing buffers cannot be grown
@@ -69,7 +69,7 @@ proc flipPage(s: OutputStreamVar) =
   s.cursor.head = cast[ptr byte](addr s.pages[s.pages.len - 1].buffer[0])
   # TODO: There is an assumption here and elsewhere that `s.pages[^1]` has
   # a length equal to `s.pageSize`
-  s.cursor.bufferEnd = cast[ptr byte](shift(s.cursor.head, s.pageSize))
+  s.cursor.bufferEnd = cast[ptr byte](offset(s.cursor.head, s.pageSize))
   s.endPos += s.pageSize
 
 proc addPage(s: OutputStreamVar) =
@@ -121,7 +121,7 @@ proc init*(T: type OutputStream,
   new result
   let buffer = cast[ptr byte](buffer)
   result.cursor.head = buffer
-  result.cursor.bufferEnd = buffer.shift(len)
+  result.cursor.bufferEnd = offset(buffer, len)
   result.cursor.stream = result
   result.endPos = len
 
@@ -183,7 +183,7 @@ proc tryFlushing(s: OutputStreamVar) {.inline.} =
 
 func endAddr(s: string): ptr byte {.inline.} =
   let a = unsafeAddr s[0]
-  shift(cast[ptr byte](a), s.len)
+  offset(cast[ptr byte](a), s.len)
 
 template startAddr(s: string): ptr byte =
   cast[ptr byte](unsafeAddr s[0])
@@ -203,7 +203,7 @@ proc findNextPage(c: var WriteCursor): int =
 proc moveToPage(c: var WriteCursor, p: var OutputPage) =
   doAssert p.startOffset > 0
   c.head = cast[ptr byte](unsafeAddr p.buffer[0])
-  c.bufferEnd = shift(c.head, p.startOffset)
+  c.bufferEnd = offset(c.head, p.startOffset)
   p.startOffset = 0
 
 proc moveToNextPage(c: var WriteCursor) =
@@ -218,7 +218,7 @@ proc append*(c: var WriteCursor, b: byte) =
       c.stream.tryFlushing()
 
   c.head[] = b
-  c.head = shift(c.head, 1)
+  c.head = offset(c.head, 1)
 
 template append*(c: var WriteCursor, x: char) =
   bind append
@@ -237,12 +237,12 @@ proc writeDataAsPages(s: OutputStreamVar, data: ptr byte, dataLen: int) =
 
     while dataLen > s.pageSize:
       s.vtable.writePage(s, makeOpenArray(data, s.pageSize))
-      data = shift(data, s.pageSize)
+      data = offset(data, s.pageSize)
       dec dataLen, s.pageSize
       s.endPos += s.pageSize
 
   copyMem(s.cursor.head, data, dataLen)
-  s.cursor.head = shift(s.cursor.head, dataLen)
+  s.cursor.head = offset(s.cursor.head, dataLen)
 
 proc newStringFromBytes(input: ptr byte, inputLen: int): string =
   assert inputLen > 0
@@ -257,7 +257,7 @@ proc handleLongAppend*(c: var WriteCursor, bytes: openarray[byte]) =
     stream = c.stream
 
   template reduceInput(delta: int) =
-    inputPos = shift(inputPos, delta)
+    inputPos = offset(inputPos, delta)
     inputLen -= delta
 
   # Since the input is longer, we first make sure that the top-most
@@ -283,14 +283,14 @@ proc handleLongAppend*(c: var WriteCursor, bytes: openarray[byte]) =
       if pageRunway < pageLen:
         doAssert inputLen <= pageRunway
         copyMem(pageStart, inputPos, inputLen)
-        c.head = shift(pageStart, inputLen)
-        c.bufferEnd = shift(pageStart, pageRunway)
+        c.head = offset(pageStart, inputLen)
+        c.bufferEnd = offset(pageStart, pageRunway)
         return
       else:
         if inputLen <= pageLen:
           copyMem(pageStart, inputPos, inputLen)
-          c.head = shift(pageStart, inputLen)
-          c.bufferEnd = shift(pageStart, pageLen)
+          c.head = offset(pageStart, inputLen)
+          c.bufferEnd = offset(pageStart, pageLen)
           return
         else:
           copyMem(pageStart, inputPos, pageLen)
@@ -343,7 +343,7 @@ proc handleLongAppend*(c: var WriteCursor, bytes: openarray[byte]) =
       # This will also reset the cursor to the start of the page:
       stream.addPage
       copyMem(c.head, inputPos, inputLen)
-      c.head = shift(c.head, inputLen)
+      c.head = offset(c.head, inputLen)
       # We must correct endPos, because it must mark the end of the top-most
       # page. Since `addPage` advances the endPos as well and our remaining
       # input was written to the newly created page, our initial increase of
@@ -361,7 +361,7 @@ proc append*(c: var WriteCursor, bytes: openarray[byte]) {.inline.} =
   if inputLen == 0: return
   if inputLen <= pageRemaining:
     copyMem(c.head, unsafeAddr bytes[0], inputLen)
-    c.head = shift(c.head, inputLen)
+    c.head = offset(c.head, inputLen)
   else:
     handleLongAppend(c, bytes)
 
@@ -417,7 +417,7 @@ proc createCursor(s: OutputStreamVar, size: int): WriteCursor =
   inc s.extCursorsCount
 
   result = WriteCursor(head: s.cursor.head,
-                       bufferEnd: s.cursor.head.shift(size),
+                       bufferEnd: offset(s.cursor.head, size),
                        stream: s)
 
   s.cursor.head = result.bufferEnd
@@ -439,7 +439,7 @@ proc delayFixedSizeWrite*(s: OutputStreamVar, size: Natural): WriteCursor =
                                startOffset: size)
 
     let (pageStart, pageEnd) = boundingAddrs s.pages[s.pages.len - 1].buffer
-    s.cursor.head = shift(pageStart, size)
+    s.cursor.head = offset(pageStart, size)
     s.cursor.bufferEnd = pageEnd
     s.endPos += (s.pageSize - size)
 
@@ -465,7 +465,7 @@ proc writeAndFinalize*(c: var VarSizeWriteCursor, data: openarray[byte]) =
       let overestimatedBytes = cursor.runway - data.len
       doAssert overestimatedBytes >= 0
       page.startOffset = overestimatedBytes
-      copyMem(cursor.head.shift(overestimatedBytes), unsafeAddr data[0], data.len)
+      copyMem(offset(cursor.head, overestimatedBytes), unsafeAddr data[0], data.len)
       finalize cursor
       return
 
