@@ -10,11 +10,7 @@ skipDirs      = @["tests"]
 requires "nim >= 0.17.0",
          "stew"
 
-task test, "Run tests":
-  for filename in [
-      "test_input_stream",
-      "test_output_stream"
-    ]:
-      exec "nim c -r tests/" & filename
-      rmFile "tests/" & filename
+task test, "Run all tests":
+  exec "nim c -r --threads:off tests/all_tests"
+  exec "nim c -r --threads:on tests/all_tests"
 

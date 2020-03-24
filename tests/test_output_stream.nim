@@ -47,10 +47,12 @@ suite "output stream":
       # fileContents = readFile(tempFilePath).string.bytes
       memStreamContents = memStream.getOutput
 
-    check altOutput == memStreamContents
-    # check altOutput == fileContents
-    check altOutput == makeOpenArray(cast[ptr byte](buffer),
-                                     existingBufferStream.pos)
+    let outputsMatch =
+      altOutput == memStreamContents and
+      altOutput == makeOpenArray(cast[ptr byte](buffer),
+                                 existingBufferStream.pos)
+
+    check outputsMatch
 
   test "no appends produce an empty output":
     checkOutputsMatch()
