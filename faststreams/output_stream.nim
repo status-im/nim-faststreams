@@ -71,21 +71,29 @@ proc addPage(s: OutputStreamVar) =
                              startOffset: 0)
   s.flipPage
 
-proc initWithSinglePage*(s: OutputStreamVar,
-                         pageSize: int,
-                         maxWriteSize: int,
-                         minWriteSize = 1) =
-  s.pageSize = pageSize
-  s.maxWriteSize = maxWriteSize
-  s.minWriteSize = minWriteSize
-  s.pages = initDeque[OutputPage]()
-  s.addPage
-  s.cursor.stream = s
+proc implementOutputStream*(pageSize: int,
+                            maxWriteSize = high(int),
+                            minWriteSize = 1,
+                            vtable: ptr OutputStreamVTable = nil,
+                            outputDevice: RootRef = nil): OutputStream =
+  ## This proc is intented for use by module that implement
+  ## their own flavours of OutputStream by providing a custom
+  ## VTable. Such modules should export easier to use high-level
+  ## constructors intended for end-users.
+  result = OutputStream(
+    pageSize: pageSize,
+    maxWriteSize: maxWriteSize,
+    minWriteSize: minWriteSize,
+    pages: initDeque[OutputPage](),
+    vtable: vtable,
+    outputDevice: outputDevice)
+
+  result.addPage
+  result.cursor.stream = result
 
 proc init*(T: type OutputStream,
            pageSize = defaultPageSize): OutputStream =
-  result = OutputStream()
-  result.initWithSinglePage pageSize, high(int)
+  implementOutputStream pageSize
 
 let FileStreamVTable = OutputStreamVTable(
   writePage: proc (s: OutputStreamVar, data: openarray[byte]) {.nimcall, gcsafe.} =
@@ -102,10 +110,9 @@ let FileStreamVTable = OutputStreamVTable(
 proc init*(T: type OutputStream,
            filename: string,
            pageSize = defaultPageSize): OutputStream =
-  result = OutputStream(
-    outputDevice: FileOutput(file: open(filename, fmWrite)),
-    vtable: unsafeAddr FileStreamVTable)
-  result.initWithSinglePage pageSize, high(int)
+  implementOutputStream pageSize,
+    outputDevice = FileOutput(file: open(filename, fmWrite)),
+    vtable = unsafeAddr FileStreamVTable
 
 proc init*(T: type OutputStream,
            buffer: pointer, len: int): OutputStream =
