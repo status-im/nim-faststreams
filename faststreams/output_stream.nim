@@ -23,12 +23,15 @@ type
   OutputStream* = ref OutputStreamObj
   OutputStreamVar = OutputStream
 
-  OutputStreamVTable* = object
-    writePage*: proc (s: OutputStream, page: openarray[byte])
-                     {.nimcall, gcsafe, raises: [IOError, Defect].}
+  WritePageProc* = proc (s: OutputStream, page: openarray[byte])
+                        {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-    flush*: proc (s: OutputStream)
-                 {.nimcall, gcsafe, raises: [IOError, Defect].}
+  FlushProc* = proc (s: OutputStream)
+                    {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  OutputStreamVTable* = object
+    writePage*: WritePageProc
+    flush*: FlushProc
 
   WriteCursor* = object
     head, bufferEnd: ptr byte
@@ -107,12 +110,19 @@ let FileStreamVTable = OutputStreamVTable(
     flushFile output.file
 )
 
+template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
+  ## This is a simple work-around for the somewhat broken side
+  ## effects analysis of Nim - reading from global let variables
+  ## is considered a side-effect.
+  {.noSideEffect.}:
+    unsafeAddr vtable
+
 proc init*(T: type OutputStream,
            filename: string,
            pageSize = defaultPageSize): OutputStream =
   implementOutputStream pageSize,
     outputDevice = FileOutput(file: open(filename, fmWrite)),
-    vtable = unsafeAddr FileStreamVTable
+    vtable = vtableAddr FileStreamVTable
 
 proc init*(T: type OutputStream,
            buffer: pointer, len: int): OutputStream =
