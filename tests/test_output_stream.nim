@@ -154,11 +154,11 @@ suite "output stream":
 
   test "nim odd behavior":
     # discovered in status-im/nim-snappy#2
-    proc encode(s: OutputStreamVar) =
+    proc encode(s: OutputStream) =
       check true
 
-    proc abc(s: OutputStreamVar) =
-      OutputStreamVar(s.outputDevice).encode
+    proc abc(s: OutputStream) =
+      OutputStream(s.outputDevice).encode
       check true
 
     var os = new OutputStream

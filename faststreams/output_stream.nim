@@ -1,14 +1,15 @@
 import
-  deques, stew/[ptrops, strings, ranges/ptr_arith]
+  deques, typetraits,
+  stew/[ptrops, strings, ranges/ptr_arith]
 
 type
   OutputPage = object
     buffer: string
     startOffset: int
 
-  # somehow casting outputDevice to
-  # OutputStreamVar requires RootObj
-  OutputStream* = object of RootObj
+  # We inherit from RootObj because in layered streams
+  # the stream itself is often used as an `outputDevice`
+  OutputStreamObj = object of RootObj
     cursor*: WriteCursor
     pages: Deque[OutputPage]
     endPos: int
@@ -19,31 +20,24 @@ type
     maxWriteSize*: int
     minWriteSize*: int
 
+  OutputStream* = ref OutputStreamObj
+  OutputStreamVar = OutputStream
+
+  OutputStreamVTable* = object
+    writePage*: proc (s: OutputStream, page: openarray[byte])
+                     {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    flush*: proc (s: OutputStream)
+                 {.nimcall, gcsafe, raises: [IOError, Defect].}
+
   WriteCursor* = object
     head, bufferEnd: ptr byte
     stream: OutputStreamVar
 
-  FileOutput = ref object of RootObj
-    file: File
-
-  OutputStreamVar* = ref OutputStream
-
-  MemOutputStream* = distinct OutputStreamVar
-    # Writing to a MemOutputStream produces no side-effects
-
-  # Keep this temporary for backward-compatibility
-  DelayedWriteCursor* = WriteCursor
   VarSizeWriteCursor* = distinct WriteCursor
 
-  OutputStreamVTable* = object
-    # TODO - the noSideEffect is temporary here until we switch to Nim 0.20.2
-    #        where noSideEffects overrides may make it possible to implement
-    #        the MemOutputStream handling.
-    writePage*: proc (s: OutputStreamVar, page: openarray[byte])
-                     {.noSideEffect, nimcall, gcsafe, raises: [IOError, Defect] .}
-
-    flush*: proc (s: OutputStreamVar)
-                 {.noSideEffect, nimcall, gcsafe, raises: [IOError, Defect].}
+  FileOutput = ref object of RootObj
+    file: File
 
 const
   allocatorMetadata = 0 # TODO: Get this from Nim's allocator.
@@ -89,36 +83,33 @@ proc initWithSinglePage*(s: OutputStreamVar,
   s.cursor.stream = s
 
 proc init*(T: type OutputStream,
-           pageSize = defaultPageSize): ref OutputStream =
-  new result
+           pageSize = defaultPageSize): OutputStream =
+  result = OutputStream()
   result.initWithSinglePage pageSize, high(int)
 
-when false:
-  # TODO: revisit this when we switch to Nim 0.20.2 and we have working
-  #       noSideEffect overrides.
-  let FileStreamVTable = OutputStreamVTable(
-    writePage: proc (s: OutputStreamVar, data: openarray[byte]) {.nimcall, gcsafe.} =
-      var output = FileOutput(s.outputDevice)
-      var written = output.file.writeBuffer(unsafeAddr data[0], data.len)
-      if written != data.len:
-        raise newException(IOError, "Failed to write OutputStream page.")
-    ,
-    flush: proc (s: OutputStreamVar) {.nimcall, gcsafe.} =
-      var output = FileOutput(s.outputDevice)
-      flushFile output.file
-  )
-
-  proc init*(T: type OutputStream,
-             filename: string,
-             pageSize = defaultPageSize): ref OutputStream =
-    new result
-    result.outputDevice = FileOutput(file: open(filename, fmWrite))
-    result.vtable = unsafeAddr FileStreamVTable
-    result.initWithSinglePage pageSize, high(int)
+let FileStreamVTable = OutputStreamVTable(
+  writePage: proc (s: OutputStreamVar, data: openarray[byte]) {.nimcall, gcsafe.} =
+    var output = FileOutput(s.outputDevice)
+    var written = output.file.writeBuffer(unsafeAddr data[0], data.len)
+    if written != data.len:
+      raise newException(IOError, "Failed to write OutputStream page.")
+  ,
+  flush: proc (s: OutputStreamVar) {.nimcall, gcsafe.} =
+    var output = FileOutput(s.outputDevice)
+    flushFile output.file
+)
 
 proc init*(T: type OutputStream,
-           buffer: pointer, len: int): ref OutputStream =
-  new result
+           filename: string,
+           pageSize = defaultPageSize): OutputStream =
+  result = OutputStream(
+    outputDevice: FileOutput(file: open(filename, fmWrite)),
+    vtable: unsafeAddr FileStreamVTable)
+  result.initWithSinglePage pageSize, high(int)
+
+proc init*(T: type OutputStream,
+           buffer: pointer, len: int): OutputStream =
+  result = OutputStream()
   let buffer = cast[ptr byte](buffer)
   result.cursor.head = buffer
   result.cursor.bufferEnd = offset(buffer, len)
@@ -369,9 +360,9 @@ proc append*(c: var WriteCursor, chars: openarray[char]) {.inline.} =
   var charsStart = unsafeAddr chars[0]
   c.append makeOpenArray(cast[ptr byte](charsStart), chars.len)
 
-template appendMemCopy*(c: var WriteCursor, value: auto) =
+template appendMemCopy*[T](c: var WriteCursor, value: T) =
   bind append
-  # TODO: add a check that this is a trivial type
+  static: assert supportsCopyMem(T)
   let valueAddr = unsafeAddr value
   c.append makeOpenArray(cast[ptr byte](valueAddr), sizeof(value))
 
@@ -396,17 +387,15 @@ proc getOutput*(s: OutputStreamVar, T: type string): string =
     result.swap s.pages[0].buffer
   else:
     result = newStringOfCap(s.pos)
-    for page in s.pages:
+    for page in items(s.pages):
       result.add page.buffer.toOpenArray(page.startOffset.int,
                                          page.buffer.len - 1)
 
 template getOutput*(s: OutputStreamVar, T: type seq[byte]): seq[byte] =
   cast[seq[byte]](s.getOutput(string))
 
-proc getOutput*(s: OutputStreamVar): seq[byte] =
-  # TODO: is the extra copy here optimized away?
-  # Turning this proc into a template creates problems at the moment.
-  s.getOutput(seq[byte])
+template getOutput*(s: OutputStreamVar): seq[byte] =
+  cast[seq[byte]](s.getOutput(string))
 
 proc finishPageEarly(s: OutputStreamVar, unwrittenBytes: int) {.inline.} =
   s.pages[s.pages.len - 1].buffer.setLen(s.pageSize - unwrittenBytes)
