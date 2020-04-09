@@ -24,7 +24,7 @@ suite "output stream":
     var memStream = OutputStream.init
     var altOutput: seq[byte] = @[]
     var tempFilePath = getTempDir() / "faststreams_testfile"
-    # var fileStream = OutputStream.init tempFilePath
+    var fileStream = OutputStream.init tempFilePath
 
     const bufferSize = 1000000
     var buffer = alloc(bufferSize)
@@ -37,14 +37,14 @@ suite "output stream":
     altOutput.add bytes(val)
 
     memStream.append val
-    # fileStream.append val
+    fileStream.append val
     existingBufferStream.append val
 
   template checkOutputsMatch =
-    # fileStream.flush
+    fileStream.flush
 
     let
-      # fileContents = readFile(tempFilePath).string.bytes
+      fileContents = readFile(tempFilePath).string.bytes
       memStreamContents = memStream.getOutput
 
     let outputsMatch =
@@ -77,7 +77,7 @@ suite "output stream":
     let cursorStart = memStream.pos
     altOutput.add delayedWriteContent
 
-    # fileStream.append delayedWriteContent
+    fileStream.append delayedWriteContent
     existingBufferStream.append delayedWriteContent
 
     var totalBytesWritten = 0
