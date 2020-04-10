@@ -379,7 +379,9 @@ proc append*(c: var WriteCursor, chars: openarray[char]) {.inline.} =
 
 template appendMemCopy*[T](c: var WriteCursor, value: T) =
   bind append
-  static: assert supportsCopyMem(T)
+  static:
+    type TT = T # TODO This deals with a Nim bug
+    assert supportsCopyMem(TT)
   let valueAddr = unsafeAddr value
   c.append makeOpenArray(cast[ptr byte](valueAddr), sizeof(value))
 
