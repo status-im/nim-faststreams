@@ -5,7 +5,7 @@ import
 suite "input stream":
   test "string input":
     var input = repeat("1234 5678 90AB CDEF\n", 1000)
-    var stream = memoryStream(input)
+    var stream = memoryInput(input)
 
     check:
       (stream.readBytes(4) == "1234".toOpenArrayByte(0, 3))

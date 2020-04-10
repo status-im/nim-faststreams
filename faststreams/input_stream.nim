@@ -1,192 +1,223 @@
 import
-  memfiles, options, stew/[ptrops, ranges/ptr_arith]
-
-const
-  # pageSize = 4096
-  debugHelpers = false
+  memfiles, options,
+  stew/[ptrops, ranges/ptr_arith]
 
 type
-  StreamReader = proc (bufferStart: ptr byte, bufferSize: int): int {.gcsafe.}
-  # TODO: use openarray once it's supported
-  AsyncStreamReader = StreamReader # proc (bufferStart: ptr byte, bufferSize: int): Future[int]
-  CloseStreamProc = proc ()
-
-  ByteStream* = object of RootObj
+  # We inherit from RootObj because in layered streams
+  # the stream itself is often used as an `outputDevice`
+  InputStreamObj = object of RootObj
     head*: ptr byte
     bufferSize: int
     bufferStart, bufferEnd: ptr byte
-    cursorsList: ptr StreamCursor
-    reader: StreamReader
-    asyncReader: AsyncStreamReader
-    closeStream: CloseStreamProc
     bufferEndPos: int
+    inputDevice*: RootRef
+    vtable*: ptr InputStreamVTable
 
-  StreamCursor* = object
-    head, bufferEnd: ptr byte
-    nextCursor: ptr StreamCursor
+  InputStream* = ref InputStreamObj
 
-  BufferedStream*[size: static int] = object of ByteStream
-    buffer: array[size, byte]
+  AsciiInputStream* = distinct InputStream
+  Utf8InputStream* = distinct InputStream
 
-  AsciiStream* = distinct ByteStream
-  UnicodeStream* = distinct ByteStream
-  ObjectStream*[T] = distinct ByteStream
+  ReadSyncProc* = proc (s: InputStream, buffer: ptr byte, bufSize: int): int
+                       {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-  # TODO: ByteStreamVar should become a `var` short-lived pointer once this is supported
-  ByteStreamVar* = ref ByteStream
-  AsciiStreamVar* = ref AsciiStream
+  ReadAsyncCallback* = proc (s: InputStream, bytesRead: int)
+                            {.nimcall, gcsafe, raises: [Defect].}
 
-  InputStreamVar* = ref ByteStream
+  ReadAsyncProc* = proc (s: InputStream,
+                         buffer: ptr byte, bufSize: int,
+                         cb: ReadAsyncCallback)
+                        {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-proc openFile*(filename: string): ByteStreamVar =
-  new result
-  var memFile = memfiles.open(filename)
-  result.head = cast[ptr byte](memFile.mem)
+  CloseStreamProc* = proc (s: InputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  InputStreamVTable* = object
+    readSync*: ReadSyncProc
+    readAsync*: ReadAsyncProc
+    closeStream*: CloseStreamProc
+    hasKnownLen*: bool
+
+  FileInput = ref object of RootObj
+    file: MemFile
+
+const
+  debugHelpers = false
+  nimAllocatorMetadataSize* = 0
+    # TODO: Get this from Nim's allocator.
+    # The goal is to make perfect page-aligned allocations
+  defaultPageSize = 4096 - nimAllocatorMetadataSize
+
+let FileStreamVTable = InputStreamVTable(
+  readSync: nil,
+  readAsync: nil,
+  closeStream: proc (s: InputStream)
+               {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    try:
+      close FileInput(s.inputDevice).file
+    except OSError as err:
+      raise newException(IOError, "Failed to close file", err)
+  ,
+  hasKnownLen: true
+)
+
+template vtableAddr*(vtable: InputStreamVTable): ptr InputStreamVTable =
+  ## This is a simple work-around for the somewhat broken side
+  ## effects analysis of Nim - reading from global let variables
+  ## is considered a side-effect.
+  {.noSideEffect.}:
+    unsafeAddr vtable
+
+proc fileInput*(filename: string): InputStream =
+  let
+    inputDevice = FileInput(file: memfiles.open(filename))
+    head = cast[ptr byte](inputDevice.file.mem)
+    fileSize = inputDevice.file.size
+
+  result = InputStream(
+    head: head,
+    bufferEnd: offset(head, fileSize),
+    bufferEndPos: fileSize,
+    inputDevice: inputDevice,
+    vtable: vtableAddr FileStreamVTable)
+
   when debugHelpers:
     result.bufferStart = result.head
-  result.bufferEnd = offset(result.head, memFile.size)
-  result.bufferEndPos = memFile.size
-  result.closeStream = proc = close memFile
 
-proc init*(T: type ByteStream,
-           mem: openarray[byte],
-           reader = StreamReader(nil),
-           asyncReader = AsyncStreamReader(nil)): ByteStream =
-  # TODO: the result should use `from mem` once it's supported
-  result.head = unsafeAddr mem[0]
-  result.bufferEnd = offset(result.head, mem.len)
-  result.bufferEndPos = mem.len
-  result.reader = reader
-  result.asyncReader = asyncReader
+proc implementInputStream*(vtable: ptr InputStreamVTable,
+                           inputDevice: RootRef,
+                           pageSize = defaultPageSize): InputStream =
+  # TODO: We need to allocate memory here and start reading
+  InputStream(inputDevice: inputDevice,
+              vtable: vtable)
 
-proc memoryStream*(mem: openarray[byte]): ByteStreamVar = # TODO: mark the result with `from mem`
-  new result
-  result[] = ByteStream.init(mem)
+proc memoryInput*(mem: openarray[byte]): InputStream =
+  let head = unsafeAddr mem[0]
+  InputStream(
+    head: head,
+    bufferEnd: offset(head, mem.len),
+    bufferEndPos: mem.len)
 
-proc memoryStream*(str: string): ByteStreamVar = # TODO: mark the result with `from str`
-  new result
-  result[] = init(ByteStream, str.toOpenArrayByte(0, str.len - 1))
+proc memoryInput*(str: string): InputStream =
+  memoryInput str.toOpenArrayByte(0, str.len - 1)
 
-proc init*(T: type BufferedStream,
-           reader = StreamReader(nil),
-           asyncReader = AsyncStreamReader(nil)): BufferedStream =
-  result.init result.buffer, reader, asyncReader
-
-proc endPos*(s: InputStreamVar): int =
-  # TODO This needs to use a VTable for `system.File` based streams
+proc endPos*(s: InputStream): int =
+  doAssert s.vtable == nil or s.vtable.hasKnownLen
   return s.bufferEndPos
 
-proc syncRead(s: var ByteStream): bool =
-  let bytesRead = s.reader(s.bufferStart, s.bufferSize)
+proc syncRead(s: InputStream): bool =
+  let bytesRead = s.vtable.readSync(s, s.bufferStart, s.bufferSize)
   if bytesRead == 0:
-    s.reader = nil
+    # TODO close the input device
+    s.inputDevice = nil
     return true
   else:
     s.bufferEnd = offset(s.bufferStart, bytesRead)
     s.bufferEndPos += bytesRead
     return false
 
-proc ensureBytes*(s: var ByteStream, n: int): bool =
+proc ensureBytes*(s: InputStream, n: int): bool =
   if distance(s.head, s.bufferEnd) >= n:
     return true
 
-  if s.reader == nil:
+  if s.inputDevice == nil:
     return false
 
+  # TODO
   doAssert false, "Multi-buffer reading will be implemented later"
 
-proc eof*(s: var ByteStream): bool =
+proc eof*(s: InputStream): bool =
   if s.head != s.bufferEnd:
     return false
 
-  if s.reader == nil:
+  if s.inputDevice == nil:
     return true
 
   return s.syncRead()
 
-proc eob*(s: ByteStream): bool {.inline.} =
-  s.head != s.bufferEnd
+#proc eob*(s: InputStream): bool {.inline.} =
+#  s.head != s.bufferEnd
 
-proc peek*(s: ByteStream): byte {.inline.} =
+proc peek*(s: InputStream): byte {.inline.} =
   doAssert s.head != s.bufferEnd
   return s.head[]
 
 when debugHelpers:
-  proc showPosition*(s: ByteStream) =
+  proc showPosition*(s: InputStream) =
     echo "head at ", distance(s.bufferStart, s.head), "/",
                      distance(s.bufferStart, s.bufferEnd)
 
-proc advance*(s: var ByteStream) =
+proc advance*(s: InputStream) =
   if s.head != s.bufferEnd:
     s.head = offset(s.head, 1)
-  elif s.reader != nil:
+  elif s.inputDevice != nil:
     discard s.syncRead()
 
-proc read*(s: var ByteStream): byte =
+proc read*(s: InputStream): byte =
   result = s.peek()
   advance s
 
-proc checkReadAhead(s: ByteStreamVar, n: int): ptr byte =
+proc checkReadAhead(s: InputStream, n: int): ptr byte =
   result = s.head
   doAssert distance(s.head, s.bufferEnd) >= n
   s.head = offset(s.head, n)
 
-template readBytes*(s: ByteStreamVar, n: int): auto =
+template readBytes*(s: InputStream, n: int): auto =
   makeOpenArray(checkReadAhead(s, n), n)
 
-proc next*(s: var ByteStream): Option[byte] =
+proc next*(s: InputStream): Option[byte] =
   if not s.eof:
     result = some s.read()
 
-proc bufferPos(s: ByteStream, pos: int): ptr byte =
+proc bufferPos(s: InputStream, pos: int): ptr byte =
   let offsetFromEnd = pos - s.bufferEndPos
   doAssert offsetFromEnd < 0
   result = offset(s.bufferEnd, offsetFromEnd)
   doAssert result >= s.bufferStart
 
-proc pos*(s: ByteStream): int {.inline.} =
+proc pos*(s: InputStream): int {.inline.} =
   s.bufferEndPos - distance(s.head, s.bufferEnd)
 
-proc firstAccessiblePos*(s: ByteStream): int {.inline.} =
+proc firstAccessiblePos*(s: InputStream): int {.inline.} =
   s.bufferEndPos - distance(s.bufferStart, s.bufferEnd)
 
-proc `[]`*(s: ByteStream, pos: int): byte {.inline.} =
+proc `[]`*(s: InputStream, pos: int): byte {.inline.} =
   s.bufferPos(pos)[]
 
-proc rewind*(s: var ByteStream, delta: int) =
+proc rewind*(s: InputStream, delta: int) =
   s.head = offset(s.head, -delta)
   doAssert s.head >= s.bufferStart
 
-proc rewindTo*(s: var ByteStream, pos: int) {.inline.} =
+proc rewindTo*(s: InputStream, pos: int) {.inline.} =
   s.head = s.bufferPos(pos)
 
 # TODO: use a destructor once we migrate to Nim 0.20
-proc close*(s: var ByteStream) =
-  if s.closeStream != nil:
-    s.closeStream()
+# TODO: It's not appropriate for this to raise
+proc close*(s: InputStream) {.raises: [IOError, Defect].} =
+  if s.vtable != nil:
+    s.vtable.closeStream(s)
 
-# TODO: Use `distrinct with` once it's supported
-template pos*(s: AsciiStream|UnicodeStream|ObjectStream): int =
-  ByteStream(s).pos
+template pos*(s: AsciiInputStream|Utf8InputStream): int =
+  InputStream(s).pos
 
-template eof*(s: var (AsciiStream|UnicodeStream|ObjectStream)): bool =
-  ByteStream(s).eof
+template eof*(s: AsciiInputStream|Utf8InputStream): bool =
+  InputStream(s).eof
 
-template eob*(s: var (AsciiStream|UnicodeStream|ObjectStream)): bool =
-  ByteStream(s).eob
+#template eob*(s: AsciiInputStream|Utf8InputStream): bool =
+#  InputStream(s).eob
 
-template close*(s: AsciiStream|UnicodeStream|ObjectStream) =
-  close ByteStream(s)
+template close*(s: AsciiInputStream|Utf8InputStream) =
+  close InputStream(s)
 
-template advance*(s: var AsciiStream) =
-  advance ByteStream(s)
+template advance*(s: AsciiInputStream) =
+  advance InputStream(s)
 
-template peek*(s: AsciiStream): char =
-  char ByteStream(s).peek()
+template peek*(s: AsciiInputStream): char =
+  char InputStream(s).peek()
 
-template read*(s: var AsciiStream): char =
-  char ByteStream(s).read()
+template read*(s: var AsciiInputStream): char =
+  char InputStream(s).read()
 
-template next*(s: var AsciiStream): Option[char] =
-  cast[Option[char]](ByteStream(s).next())
+template next*(s: var AsciiInputStream): Option[char] =
+  cast[Option[char]](InputStream(s).next())
 

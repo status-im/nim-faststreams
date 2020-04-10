@@ -13,15 +13,14 @@ type
     cursor*: WriteCursor
     pages: Deque[OutputPage]
     endPos: int
-    vtable*: ptr OutputStreamVTable
-    outputDevice*: RootRef
     extCursorsCount: int
     pageSize: int
     maxWriteSize*: int
     minWriteSize*: int
+    outputDevice*: RootRef
+    vtable*: ptr OutputStreamVTable
 
   OutputStream* = ref OutputStreamObj
-  OutputStreamVar = OutputStream
 
   WritePageProc* = proc (s: OutputStream, page: openarray[byte])
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
@@ -35,7 +34,7 @@ type
 
   WriteCursor* = object
     head, bufferEnd: ptr byte
-    stream: OutputStreamVar
+    stream: OutputStream
 
   VarSizeWriteCursor* = distinct WriteCursor
 
@@ -43,15 +42,16 @@ type
     file: File
 
 const
-  allocatorMetadata = 0 # TODO: Get this from Nim's allocator.
-                        # The goal is to make perfect page-aligned allocations
-  defaultPageSize = 4096 - allocatorMetadata - 1 # 1 byte for the null terminator
+  nimAllocatorMetadataSize* = 0
+    # TODO: Get this from Nim's allocator.
+    # The goal is to make perfect page-aligned allocations
+  defaultPageSize = 4096 - nimAllocatorMetadataSize - 1 # 1 byte for the null terminator
 
 proc createWriteCursor*[R, T](x: var array[R, T]): WriteCursor =
   let startAddr = cast[ptr byte](addr x[0])
   WriteCursor(head: startAddr, bufferEnd: offset(startAddr, sizeof x))
 
-template canExtendOutput(s: OutputStreamVar): bool =
+template canExtendOutput(s: OutputStream): bool =
   # Streams writing to pre-allocated existing buffers cannot be grown
   s != nil and s.pageSize > 0
 
@@ -62,23 +62,23 @@ template isExternalCursor(c: var WriteCursor): bool =
 func runway*(c: var WriteCursor): int {.inline.} =
   distance(c.head, c.bufferEnd)
 
-proc flipPage(s: OutputStreamVar) =
+proc flipPage(s: OutputStream) =
   s.cursor.head = cast[ptr byte](addr s.pages[s.pages.len - 1].buffer[0])
   # TODO: There is an assumption here and elsewhere that `s.pages[^1]` has
   # a length equal to `s.pageSize`
   s.cursor.bufferEnd = cast[ptr byte](offset(s.cursor.head, s.pageSize))
   s.endPos += s.pageSize
 
-proc addPage(s: OutputStreamVar) =
+proc addPage(s: OutputStream) =
   s.pages.addLast OutputPage(buffer: newString(s.pageSize),
                              startOffset: 0)
   s.flipPage
 
-proc implementOutputStream*(pageSize: int,
+proc implementOutputStream*(outputDevice: RootRef,
+                            vtable: ptr OutputStreamVTable,
+                            pageSize = defaultPageSize,
                             maxWriteSize = high(int),
-                            minWriteSize = 1,
-                            vtable: ptr OutputStreamVTable = nil,
-                            outputDevice: RootRef = nil): OutputStream =
+                            minWriteSize = 1): OutputStream =
   ## This proc is intented for use by module that implement
   ## their own flavours of OutputStream by providing a custom
   ## VTable. Such modules should export easier to use high-level
@@ -94,18 +94,25 @@ proc implementOutputStream*(pageSize: int,
   result.addPage
   result.cursor.stream = result
 
-proc init*(T: type OutputStream,
-           pageSize = defaultPageSize): OutputStream =
-  implementOutputStream pageSize
+proc memoryOutput*(pageSize = defaultPageSize): OutputStream =
+  implementOutputStream(outputDevice = nil, vtable = nil, pageSize = pageSize)
+
+proc memoryOutput*(buffer: pointer, len: int): OutputStream =
+  result = OutputStream()
+  let buffer = cast[ptr byte](buffer)
+  result.cursor.head = buffer
+  result.cursor.bufferEnd = offset(buffer, len)
+  result.cursor.stream = result
+  result.endPos = len
 
 let FileStreamVTable = OutputStreamVTable(
-  writePage: proc (s: OutputStreamVar, data: openarray[byte]) {.nimcall, gcsafe.} =
+  writePage: proc (s: OutputStream, data: openarray[byte]) {.nimcall, gcsafe.} =
     var output = FileOutput(s.outputDevice)
     var written = output.file.writeBuffer(unsafeAddr data[0], data.len)
     if written != data.len:
       raise newException(IOError, "Failed to write OutputStream page.")
   ,
-  flush: proc (s: OutputStreamVar) {.nimcall, gcsafe.} =
+  flush: proc (s: OutputStream) {.nimcall, gcsafe.} =
     var output = FileOutput(s.outputDevice)
     flushFile output.file
 )
@@ -117,34 +124,27 @@ template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
   {.noSideEffect.}:
     unsafeAddr vtable
 
-proc init*(T: type OutputStream,
-           filename: string,
-           pageSize = defaultPageSize): OutputStream =
-  implementOutputStream pageSize,
-    outputDevice = FileOutput(file: open(filename, fmWrite)),
-    vtable = vtableAddr FileStreamVTable
+proc fileOutput*(filename: string,
+                 fileMode: FileMode = fmWrite,
+                 pageSize = defaultPageSize): OutputStream {.
+  raises: [IOError, Defect]
+.} =
+  implementOutputStream FileOutput(file: open(filename, fileMode)),
+                        vtable = vtableAddr FileStreamVTable,
+                        pageSize = pageSize
 
-proc init*(T: type OutputStream,
-           buffer: pointer, len: int): OutputStream =
-  result = OutputStream()
-  let buffer = cast[ptr byte](buffer)
-  result.cursor.head = buffer
-  result.cursor.bufferEnd = offset(buffer, len)
-  result.cursor.stream = result
-  result.endPos = len
-
-proc pos*(s: OutputStreamVar): int =
+proc pos*(s: OutputStream): int =
   s.endPos - s.cursor.runway
 
-proc safeWritePage(s: OutputStreamVar, data: openarray[byte]) {.inline.} =
+proc safeWritePage(s: OutputStream, data: openarray[byte]) {.inline.} =
   if data.len > 0: s.vtable.writePage(s, data)
 
-proc writePages(s: OutputStreamVar, skipLast = 0) =
+proc writePages(s: OutputStream, skipLast = 0) =
   assert s.vtable != nil
   for i in 0 ..< s.pages.len - skipLast:
     s.safeWritePage s.pages[i].buffer.toOpenArrayByte(0, s.pages[i].buffer.len - 1)
 
-proc writePartialPage(s: OutputStreamVar, page: var OutputPage) =
+proc writePartialPage(s: OutputStream, page: var OutputPage) =
   assert s.vtable != nil
   let
     unwrittenBytes = s.cursor.runway
@@ -157,7 +157,7 @@ proc writePartialPage(s: OutputStreamVar, page: var OutputPage) =
   page.startOffset = 0
   s.flipPage
 
-proc flush*(s: OutputStreamVar) =
+proc flush*(s: OutputStream) =
   doAssert s.extCursorsCount == 0
   if s.vtable != nil:
     # We write all pages except the last one
@@ -169,13 +169,13 @@ proc flush*(s: OutputStreamVar) =
     # Finally, we flush
     s.vtable.flush(s)
 
-proc writePendingPagesAndLeaveOne(s: OutputStreamVar) {.inline.} =
+proc writePendingPagesAndLeaveOne(s: OutputStream) {.inline.} =
   s.writePages
   s.pages.shrink(fromFirst = s.pages.len - 1)
   s.pages[0].startOffset = 0
   s.flipPage
 
-proc tryFlushing(s: OutputStreamVar) {.inline.} =
+proc tryFlushing(s: OutputStream) {.inline.} =
   # Pre-conditions:
   #  * The cursor has reached the current buffer end
   #
@@ -232,7 +232,7 @@ template append*(c: var WriteCursor, x: char) =
   bind append
   c.append byte(x)
 
-proc writeDataAsPages(s: OutputStreamVar, data: ptr byte, dataLen: int) =
+proc writeDataAsPages(s: OutputStream, data: ptr byte, dataLen: int) =
   var
     data = data
     dataLen = dataLen
@@ -387,15 +387,15 @@ template append*(c: var WriteCursor, str: string) =
   bind append
   c.append str.toOpenArrayByte(0, str.len - 1)
 
-template append*(s: OutputStreamVar, value: auto) =
+template append*(s: OutputStream, value: auto) =
   bind append
   s.cursor.append value
 
-template appendMemCopy*(s: OutputStreamVar, value: auto) =
+template appendMemCopy*(s: OutputStream, value: auto) =
   bind append
   s.cursor.append value
 
-proc getOutput*(s: OutputStreamVar, T: type string): string =
+proc getOutput*(s: OutputStream, T: type string): string =
   doAssert s.vtable == nil and s.extCursorsCount == 0 and s.pageSize > 0
 
   s.pages[s.pages.len - 1].buffer.setLen(s.pageSize - s.cursor.runway)
@@ -408,18 +408,18 @@ proc getOutput*(s: OutputStreamVar, T: type string): string =
       result.add page.buffer.toOpenArray(page.startOffset.int,
                                          page.buffer.len - 1)
 
-template getOutput*(s: OutputStreamVar, T: type seq[byte]): seq[byte] =
+template getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   cast[seq[byte]](s.getOutput(string))
 
-template getOutput*(s: OutputStreamVar): seq[byte] =
+template getOutput*(s: OutputStream): seq[byte] =
   cast[seq[byte]](s.getOutput(string))
 
-proc finishPageEarly(s: OutputStreamVar, unwrittenBytes: int) {.inline.} =
+proc finishPageEarly(s: OutputStream, unwrittenBytes: int) {.inline.} =
   s.pages[s.pages.len - 1].buffer.setLen(s.pageSize - unwrittenBytes)
   s.endPos -= unwrittenBytes
   s.tryFlushing()
 
-proc createCursor(s: OutputStreamVar, size: int): WriteCursor =
+proc createCursor(s: OutputStream, size: int): WriteCursor =
   inc s.extCursorsCount
 
   result = WriteCursor(head: s.cursor.head,
@@ -428,7 +428,7 @@ proc createCursor(s: OutputStreamVar, size: int): WriteCursor =
 
   s.cursor.head = result.bufferEnd
 
-proc delayFixedSizeWrite*(s: OutputStreamVar, size: Natural): WriteCursor =
+proc delayFixedSizeWrite*(s: OutputStream, size: Natural): WriteCursor =
   let remainingBytesInPage = s.cursor.runway
   if size <= remainingBytesInPage:
     result = s.createCursor(size)
@@ -449,7 +449,7 @@ proc delayFixedSizeWrite*(s: OutputStreamVar, size: Natural): WriteCursor =
     s.cursor.bufferEnd = pageEnd
     s.endPos += (s.pageSize - size)
 
-proc delayVarSizeWrite*(s: OutputStreamVar, maxSize: Natural): VarSizeWriteCursor =
+proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
   doAssert maxSize < s.pageSize
   s.finishPageEarly s.cursor.runway
   VarSizeWriteCursor s.createCursor(maxSize)

@@ -21,14 +21,14 @@ proc randomBytes(n: int): seq[byte] =
 
 suite "output stream":
   setup:
-    var memStream = OutputStream.init
+    var memStream = memoryOutput()
     var altOutput: seq[byte] = @[]
     var tempFilePath = getTempDir() / "faststreams_testfile"
-    var fileStream = OutputStream.init tempFilePath
+    var fileStream = fileOutput(tempFilePath)
 
     const bufferSize = 1000000
     var buffer = alloc(bufferSize)
-    var existingBufferStream = OutputStream.init(buffer, bufferSize)
+    var existingBufferStream = memoryOutput(buffer, bufferSize)
 
   teardown:
     removeFile tempFilePath
