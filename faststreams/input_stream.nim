@@ -106,10 +106,14 @@ proc endPos*(s: InputStream): int =
   return s.bufferEndPos
 
 proc syncRead(s: InputStream): bool =
+  if s.vtable == nil or s.vtable.readSync == nil:
+    return true
+
   let bytesRead = s.vtable.readSync(s, s.bufferStart, s.bufferSize)
   if bytesRead == 0:
     # TODO close the input device
     s.inputDevice = nil
+    s.vtable = nil
     return true
   else:
     s.bufferEnd = offset(s.bufferStart, bytesRead)
@@ -120,7 +124,7 @@ proc ensureBytes*(s: InputStream, n: int): bool =
   if distance(s.head, s.bufferEnd) >= n:
     return true
 
-  if s.inputDevice == nil:
+  if s.vtable == nil:
     return false
 
   # TODO
@@ -130,13 +134,7 @@ proc eof*(s: InputStream): bool =
   if s.head != s.bufferEnd:
     return false
 
-  if s.inputDevice == nil:
-    return true
-
   return s.syncRead()
-
-#proc eob*(s: InputStream): bool {.inline.} =
-#  s.head != s.bufferEnd
 
 proc peek*(s: InputStream): byte {.inline.} =
   doAssert s.head != s.bufferEnd
@@ -150,8 +148,7 @@ when debugHelpers:
 proc advance*(s: InputStream) =
   if s.head != s.bufferEnd:
     s.head = offset(s.head, 1)
-  elif s.inputDevice != nil:
-    discard s.syncRead()
+  discard s.syncRead()
 
 proc read*(s: InputStream): byte =
   result = s.peek()
@@ -202,9 +199,6 @@ template pos*(s: AsciiInputStream|Utf8InputStream): int =
 
 template eof*(s: AsciiInputStream|Utf8InputStream): bool =
   InputStream(s).eof
-
-#template eob*(s: AsciiInputStream|Utf8InputStream): bool =
-#  InputStream(s).eob
 
 template close*(s: AsciiInputStream|Utf8InputStream) =
   close InputStream(s)
