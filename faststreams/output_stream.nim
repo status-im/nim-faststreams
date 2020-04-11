@@ -7,9 +7,8 @@ type
     buffer: string
     startOffset: int
 
-  # We inherit from RootObj because in layered streams
-  # the stream itself is often used as an `outputDevice`
-  OutputStreamObj = object of RootObj
+  OutputStream* = ref object of RootObj
+    vtable*: ptr OutputStreamVTable
     cursor*: WriteCursor
     pages: Deque[OutputPage]
     endPos: int
@@ -17,10 +16,12 @@ type
     pageSize: int
     maxWriteSize*: int
     minWriteSize*: int
-    outputDevice*: RootRef
-    vtable*: ptr OutputStreamVTable
 
-  OutputStream* = ref OutputStreamObj
+  LayeredOutputStream* = ref object of OutputStream
+    subStream*: OutputStream
+
+  OutputStreamHandle* = object
+    s*: OutputStream
 
   WritePageProc* = proc (s: OutputStream, page: openarray[byte])
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
@@ -28,9 +29,20 @@ type
   FlushProc* = proc (s: OutputStream)
                     {.nimcall, gcsafe, raises: [IOError, Defect].}
 
+  CloseSyncProc* = proc (s: OutputStream)
+                        {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  CloseAsyncCallback* = proc (s: OutputStream)
+                             {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  CloseAsyncProc* = proc (s: OutputStream)
+                         {.nimcall, gcsafe, raises: [IOError, Defect].}
+
   OutputStreamVTable* = object
     writePage*: WritePageProc
     flush*: FlushProc
+    closeSync*: CloseSyncProc
+    closeAsyncProc*: CloseAsyncProc
 
   WriteCursor* = object
     head, bufferEnd: ptr byte
@@ -38,7 +50,7 @@ type
 
   VarSizeWriteCursor* = distinct WriteCursor
 
-  FileOutput = ref object of RootObj
+  FileOutputStream = ref object of OutputStream
     file: File
 
 const
@@ -47,9 +59,26 @@ const
     # The goal is to make perfect page-aligned allocations
   defaultPageSize = 4096 - nimAllocatorMetadataSize - 1 # 1 byte for the null terminator
 
-proc createWriteCursor*[R, T](x: var array[R, T]): WriteCursor =
-  let startAddr = cast[ptr byte](addr x[0])
-  WriteCursor(head: startAddr, bufferEnd: offset(startAddr, sizeof x))
+proc close*(s: var OutputStream) {.raises: [IOError, Defect].} =
+  if s != nil:
+    if s.vtable != nil and s.vtable.closeSync != nil:
+      s.vtable.closeSync(s)
+    s = nil
+
+proc `=destroy`*(h: var OutputStreamHandle) {.raises: [Defect].} =
+  if h.s != nil:
+    if h.s.vtable != nil and h.s.vtable.closeSync != nil:
+      try:
+        h.s.vtable.closeSync(h.s)
+      except IOError:
+        # Since this is a destructor, there is not much we can do here.
+        # If the user wanted to handle the error, they would have called
+        # `close` manually.
+        discard # TODO
+    h.s = nil
+
+converter implicitDeref*(h: OutputStreamHandle): OutputStream =
+  h.s
 
 template canExtendOutput(s: OutputStream): bool =
   # Streams writing to pre-allocated existing buffers cannot be grown
@@ -74,47 +103,48 @@ proc addPage(s: OutputStream) =
                              startOffset: 0)
   s.flipPage
 
-proc implementOutputStream*(outputDevice: RootRef,
-                            vtable: ptr OutputStreamVTable,
-                            pageSize = defaultPageSize,
-                            maxWriteSize = high(int),
-                            minWriteSize = 1): OutputStream =
-  ## This proc is intented for use by module that implement
-  ## their own flavours of OutputStream by providing a custom
-  ## VTable. Such modules should export easier to use high-level
-  ## constructors intended for end-users.
-  result = OutputStream(
+proc initWithSinglePage*(s: OutputStream) =
+  s.addPage()
+  s.cursor.stream = s
+
+proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
+  var stream = OutputStream(
     pageSize: pageSize,
-    maxWriteSize: maxWriteSize,
-    minWriteSize: minWriteSize,
-    pages: initDeque[OutputPage](),
-    vtable: vtable,
-    outputDevice: outputDevice)
+    minWriteSize: 1,
+    maxWriteSize: high(int),
+    pages: initDeque[OutputPage]())
 
-  result.addPage
-  result.cursor.stream = result
+  stream.initWithSinglePage()
 
-proc memoryOutput*(pageSize = defaultPageSize): OutputStream =
-  implementOutputStream(outputDevice = nil, vtable = nil, pageSize = pageSize)
+  OutputStreamHandle(s: stream)
 
-proc memoryOutput*(buffer: pointer, len: int): OutputStream =
-  result = OutputStream()
+proc memoryOutput*(buffer: pointer, len: int): OutputStreamHandle =
   let buffer = cast[ptr byte](buffer)
-  result.cursor.head = buffer
-  result.cursor.bufferEnd = offset(buffer, len)
-  result.cursor.stream = result
-  result.endPos = len
+
+  var stream = OutputStream()
+  stream.cursor.head = buffer
+  stream.cursor.bufferEnd = offset(buffer, len)
+  stream.cursor.stream = stream
+  stream.endPos = len
+
+  OutputStreamHandle(s: stream)
 
 let FileStreamVTable = OutputStreamVTable(
-  writePage: proc (s: OutputStream, data: openarray[byte]) {.nimcall, gcsafe.} =
-    var output = FileOutput(s.outputDevice)
-    var written = output.file.writeBuffer(unsafeAddr data[0], data.len)
+  writePage: proc (s: OutputStream,
+                   data: openarray[byte])
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    var file = FileOutputStream(s).file
+    var written = file.writeBuffer(unsafeAddr data[0], data.len)
     if written != data.len:
       raise newException(IOError, "Failed to write OutputStream page.")
   ,
-  flush: proc (s: OutputStream) {.nimcall, gcsafe.} =
-    var output = FileOutput(s.outputDevice)
-    flushFile output.file
+  flush: proc (s: OutputStream)
+              {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    flushFile FileOutputStream(s).file
+  ,
+  closeSync: proc (s: OutputStream)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    close FileOutputStream(s).file
 )
 
 template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
@@ -126,12 +156,22 @@ template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
 
 proc fileOutput*(filename: string,
                  fileMode: FileMode = fmWrite,
-                 pageSize = defaultPageSize): OutputStream {.
+                 pageSize = defaultPageSize): OutputStreamHandle {.
   raises: [IOError, Defect]
 .} =
-  implementOutputStream FileOutput(file: open(filename, fileMode)),
-                        vtable = vtableAddr FileStreamVTable,
-                        pageSize = pageSize
+  let f = open(filename, fileMode)
+
+  var stream = FileOutputStream(
+    vtable: vtableAddr FileStreamVTable,
+    pageSize: pageSize,
+    minWriteSize: 1,
+    maxWriteSize: high(int),
+    pages: initDeque[OutputPage](),
+    file: f)
+
+  stream.initWithSinglePage()
+
+  OutputStreamHandle(s: stream)
 
 proc pos*(s: OutputStream): int =
   s.endPos - s.cursor.runway
@@ -387,15 +427,15 @@ template appendMemCopy*[T](c: var WriteCursor, value: T) =
 
 template append*(c: var WriteCursor, str: string) =
   bind append
-  c.append str.toOpenArrayByte(0, str.len - 1)
+  append c, str.toOpenArrayByte(0, str.len - 1)
 
 template append*(s: OutputStream, value: auto) =
   bind append
-  s.cursor.append value
+  append s.cursor, value
 
 template appendMemCopy*(s: OutputStream, value: auto) =
   bind append
-  s.cursor.append value
+  append s.cursor, value
 
 proc getOutput*(s: OutputStream, T: type string): string =
   doAssert s.vtable == nil and s.extCursorsCount == 0 and s.pageSize > 0
@@ -433,9 +473,9 @@ proc createCursor(s: OutputStream, size: int): WriteCursor =
 proc delayFixedSizeWrite*(s: OutputStream, size: Natural): WriteCursor =
   let remainingBytesInPage = s.cursor.runway
   if size <= remainingBytesInPage:
-    result = s.createCursor(size)
+    result = createCursor(s, size)
   else:
-    result = s.createCursor(remainingBytesInPage)
+    result = createCursor(s, remainingBytesInPage)
     var size = size - remainingBytesInPage
     s.endPos += size
     while size > s.pageSize:
@@ -454,7 +494,7 @@ proc delayFixedSizeWrite*(s: OutputStream, size: Natural): WriteCursor =
 proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
   doAssert maxSize < s.pageSize
   s.finishPageEarly s.cursor.runway
-  VarSizeWriteCursor s.createCursor(maxSize)
+  VarSizeWriteCursor createCursor(s, maxSize)
 
 proc finalize*(cursor: var WriteCursor) =
   doAssert cursor.stream.extCursorsCount > 0

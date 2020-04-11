@@ -152,14 +152,3 @@ suite "output stream":
     # The final outputs are the same
     check altOutput == memStream.getOutput
 
-  test "nim odd behavior":
-    # discovered in status-im/nim-snappy#2
-    proc encode(s: OutputStream) =
-      check true
-
-    proc abc(s: OutputStream) =
-      OutputStream(s.outputDevice).encode
-      check true
-
-    var os = new OutputStream
-    os.abc()

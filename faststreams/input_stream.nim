@@ -3,17 +3,19 @@ import
   stew/[ptrops, ranges/ptr_arith]
 
 type
-  # We inherit from RootObj because in layered streams
-  # the stream itself is often used as an `outputDevice`
-  InputStreamObj = object of RootObj
+  InputStream* = ref object of RootObj
+    vtable*: ptr InputStreamVTable
     head*: ptr byte
     bufferSize: int
     bufferStart, bufferEnd: ptr byte
     bufferEndPos: int
     inputDevice*: RootRef
-    vtable*: ptr InputStreamVTable
 
-  InputStream* = ref InputStreamObj
+  LayeredInputStream* = ref object of InputStream
+    subStream*: InputStream
+
+  InputStreamHandle* = object
+    s*: InputStream
 
   AsciiInputStream* = distinct InputStream
   Utf8InputStream* = distinct InputStream
@@ -29,16 +31,23 @@ type
                          cb: ReadAsyncCallback)
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-  CloseStreamProc* = proc (s: InputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+  CloseSyncProc* = proc (s: InputStream)
+                        {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  CloseAsyncCallback* = proc (s: InputStream)
+                             {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  CloseAsyncProc* = proc (s: InputStream)
+                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
   InputStreamVTable* = object
     readSync*: ReadSyncProc
     readAsync*: ReadAsyncProc
-    closeStream*: CloseStreamProc
+    closeSync*: CloseSyncProc
+    closeAsync*: CloseAsyncProc
     hasKnownLen*: bool
 
-  FileInput = ref object of RootObj
+  FileInputStream = ref object of InputStream
     file: MemFile
 
 const
@@ -46,15 +55,34 @@ const
   nimAllocatorMetadataSize* = 0
     # TODO: Get this from Nim's allocator.
     # The goal is to make perfect page-aligned allocations
-  defaultPageSize = 4096 - nimAllocatorMetadataSize
+  # defaultPageSize = 4096 - nimAllocatorMetadataSize
+
+proc close*(s: var InputStream) {.raises: [IOError, Defect].} =
+  if s != nil:
+    if s.vtable != nil and s.vtable.closeSync != nil:
+      s.vtable.closeSync(s)
+    s = nil
+
+proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
+  if h.s != nil:
+    if h.s.vtable != nil and h.s.vtable.closeSync != nil:
+      try:
+        h.s.vtable.closeSync(h.s)
+      except IOError:
+        # Since this is a destructor, there is not much we can do here.
+        # If the user wanted to handle the error, they would have called
+        # `close` manually.
+        discard # TODO
+    h.s = nil
+
+converter implicitDeref*(h: InputStreamHandle): InputStream =
+  h.s
 
 let FileStreamVTable = InputStreamVTable(
-  readSync: nil,
-  readAsync: nil,
-  closeStream: proc (s: InputStream)
-               {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  closeSync: proc (s: InputStream)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     try:
-      close FileInput(s.inputDevice).file
+      close FileInputStream(s).file
     except OSError as err:
       raise newException(IOError, "Failed to close file", err)
   ,
@@ -68,37 +96,32 @@ template vtableAddr*(vtable: InputStreamVTable): ptr InputStreamVTable =
   {.noSideEffect.}:
     unsafeAddr vtable
 
-proc fileInput*(filename: string): InputStream =
+proc fileInput*(filename: string): InputStreamHandle =
   let
-    inputDevice = FileInput(file: memfiles.open(filename))
-    head = cast[ptr byte](inputDevice.file.mem)
-    fileSize = inputDevice.file.size
+    memFile = memfiles.open(filename)
+    head = cast[ptr byte](memFile.mem)
+    fileSize = memFile.size
 
-  result = InputStream(
+  var stream = FileInputStream(
+    vtable: vtableAddr FileStreamVTable,
     head: head,
     bufferEnd: offset(head, fileSize),
     bufferEndPos: fileSize,
-    inputDevice: inputDevice,
-    vtable: vtableAddr FileStreamVTable)
+    file: memFile)
 
   when debugHelpers:
-    result.bufferStart = result.head
+    stream.bufferStart = head
 
-proc implementInputStream*(vtable: ptr InputStreamVTable,
-                           inputDevice: RootRef,
-                           pageSize = defaultPageSize): InputStream =
-  # TODO: We need to allocate memory here and start reading
-  InputStream(inputDevice: inputDevice,
-              vtable: vtable)
+  InputStreamHandle(s: stream)
 
-proc memoryInput*(mem: openarray[byte]): InputStream =
+proc memoryInput*(mem: openarray[byte]): InputStreamHandle =
   let head = unsafeAddr mem[0]
-  InputStream(
+  InputStreamHandle(s: InputStream(
     head: head,
     bufferEnd: offset(head, mem.len),
-    bufferEndPos: mem.len)
+    bufferEndPos: mem.len))
 
-proc memoryInput*(str: string): InputStream =
+proc memoryInput*(str: string): InputStreamHandle =
   memoryInput str.toOpenArrayByte(0, str.len - 1)
 
 proc endPos*(s: InputStream): int =
@@ -188,17 +211,11 @@ proc rewind*(s: InputStream, delta: int) =
 proc rewindTo*(s: InputStream, pos: int) {.inline.} =
   s.head = s.bufferPos(pos)
 
-# TODO: use a destructor once we migrate to Nim 0.20
-# TODO: It's not appropriate for this to raise
-proc close*(s: InputStream) {.raises: [IOError, Defect].} =
-  if s.vtable != nil:
-    s.vtable.closeStream(s)
-
 template pos*(s: AsciiInputStream|Utf8InputStream): int =
-  InputStream(s).pos
+  pos InputStream(s)
 
 template eof*(s: AsciiInputStream|Utf8InputStream): bool =
-  InputStream(s).eof
+  eof InputStream(s)
 
 template close*(s: AsciiInputStream|Utf8InputStream) =
   close InputStream(s)
