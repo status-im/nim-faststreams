@@ -13,7 +13,7 @@ type
     pages: Deque[OutputPage]
     endPos: int
     extCursorsCount: int
-    pageSize: int
+    pageSize*: int
     maxWriteSize*: int
     minWriteSize*: int
 
@@ -111,8 +111,7 @@ proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
   var stream = OutputStream(
     pageSize: pageSize,
     minWriteSize: 1,
-    maxWriteSize: high(int),
-    pages: initDeque[OutputPage]())
+    maxWriteSize: high(int))
 
   stream.initWithSinglePage()
 
@@ -166,7 +165,6 @@ proc fileOutput*(filename: string,
     pageSize: pageSize,
     minWriteSize: 1,
     maxWriteSize: high(int),
-    pages: initDeque[OutputPage](),
     file: f)
 
   stream.initWithSinglePage()
