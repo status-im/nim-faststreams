@@ -8,5 +8,5 @@ suite "input stream":
     var stream = memoryInput(input)
 
     check:
-      (stream.readBytes(4) == "1234".toOpenArrayByte(0, 3))
+      (stream.read(4) == "1234".toOpenArrayByte(0, 3))
 

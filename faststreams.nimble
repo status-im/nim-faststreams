@@ -8,7 +8,8 @@ license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
 requires "nim >= 0.17.0",
-         "stew"
+         "stew",
+         "chronos"
 
 task test, "Run all tests":
   exec "nim c -r --threads:off tests/all_tests"

@@ -1,6 +1,7 @@
 import
   deques, typetraits,
-  stew/[ptrops, strings, ranges/ptr_arith]
+  stew/[ptrops, strings, ranges/ptr_arith],
+  async_backend
 
 type
   OutputPage = object
@@ -23,24 +24,31 @@ type
   OutputStreamHandle* = object
     s*: OutputStream
 
-  WritePageProc* = proc (s: OutputStream, page: openarray[byte])
+  AsyncOutputStream* {.borrow: `.`.} = distinct OutputStream
+
+  WritePageSyncProc* = proc (s: OutputStream, page: openarray[byte])
+                            {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  WritePageAsyncProc* = proc (s: OutputStream, buf: pointer, bufLen: int): Future[void]
+                             {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+  FlushSyncProc* = proc (s: OutputStream)
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-  FlushProc* = proc (s: OutputStream)
-                    {.nimcall, gcsafe, raises: [IOError, Defect].}
+  FlushAsyncProc* = proc (s: OutputStream): Future[void]
+                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
   CloseSyncProc* = proc (s: OutputStream)
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-  CloseAsyncCallback* = proc (s: OutputStream)
-                             {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  CloseAsyncProc* = proc (s: OutputStream)
+  CloseAsyncProc* = proc (s: OutputStream): Future[void]
                          {.nimcall, gcsafe, raises: [IOError, Defect].}
 
   OutputStreamVTable* = object
-    writePage*: WritePageProc
-    flush*: FlushProc
+    writePageSync*: WritePageSyncProc
+    writePageAsync*: WritePageAsyncProc
+    flushSync*: FlushSyncProc
+    flushAsync*: FlushAsyncProc
     closeSync*: CloseSyncProc
     closeAsyncProc*: CloseAsyncProc
 
@@ -91,6 +99,13 @@ template isExternalCursor(c: var WriteCursor): bool =
 func runway*(c: var WriteCursor): int {.inline.} =
   distance(c.head, c.bufferEnd)
 
+proc prepareRunway*(s: OutputStream, length: int) =
+  # TODO implement this
+  discard
+
+template prepareRunway*(s: AsyncOutputStream, length: int) =
+  prepareRunway OutputStream(s)
+
 proc flipPage(s: OutputStream) =
   s.cursor.head = cast[ptr byte](addr s.pages[s.pages.len - 1].buffer[0])
   # TODO: There is an assumption here and elsewhere that `s.pages[^1]` has
@@ -129,16 +144,15 @@ proc memoryOutput*(buffer: pointer, len: int): OutputStreamHandle =
   OutputStreamHandle(s: stream)
 
 let FileStreamVTable = OutputStreamVTable(
-  writePage: proc (s: OutputStream,
-                   data: openarray[byte])
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  writePageSync: proc (s: OutputStream, data: openarray[byte])
+                      {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var file = FileOutputStream(s).file
     var written = file.writeBuffer(unsafeAddr data[0], data.len)
     if written != data.len:
       raise newException(IOError, "Failed to write OutputStream page.")
   ,
-  flush: proc (s: OutputStream)
-              {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  flushSync: proc (s: OutputStream)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     flushFile FileOutputStream(s).file
   ,
   closeSync: proc (s: OutputStream)
@@ -175,7 +189,7 @@ proc pos*(s: OutputStream): int =
   s.endPos - s.cursor.runway
 
 proc safeWritePage(s: OutputStream, data: openarray[byte]) {.inline.} =
-  if data.len > 0: s.vtable.writePage(s, data)
+  if data.len > 0: s.vtable.writePageSync(s, data)
 
 proc writePages(s: OutputStream, skipLast = 0) =
   assert s.vtable != nil
@@ -205,7 +219,7 @@ proc flush*(s: OutputStream) =
     # Then we write the current page, which is probably incomplete
     s.writePartialPage s.pages[0]
     # Finally, we flush
-    s.vtable.flush(s)
+    s.vtable.flushSync(s)
 
 proc writePendingPagesAndLeaveOne(s: OutputStream) {.inline.} =
   s.writePages
@@ -277,12 +291,12 @@ proc writeDataAsPages(s: OutputStream, data: ptr byte, dataLen: int) =
 
   if dataLen > s.pageSize:
     if dataLen < s.maxWriteSize:
-      s.vtable.writePage(s, makeOpenArray(data, dataLen))
+      s.vtable.writePageSync(s, makeOpenArray(data, dataLen))
       s.endPos += dataLen
       return
 
     while dataLen > s.pageSize:
-      s.vtable.writePage(s, makeOpenArray(data, s.pageSize))
+      s.vtable.writePageSync(s, makeOpenArray(data, s.pageSize))
       data = offset(data, s.pageSize)
       dec dataLen, s.pageSize
       s.endPos += s.pageSize
