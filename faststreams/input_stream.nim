@@ -59,6 +59,11 @@ proc close*(s: var InputStream) {.raises: [IOError, Defect].} =
       s.vtable.closeSync(s)
     s = nil
 
+proc preventFurtherReading(s: InputStream) =
+  s.vtable = nil
+  s.head = nil
+  s.bufferEnd = nil
+
 proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
   if h.s != nil:
     if h.s.vtable != nil and h.s.vtable.closeSync != nil:
@@ -69,7 +74,13 @@ proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
         # If the user wanted to handle the error, they would have called
         # `close` manually.
         discard # TODO
-    h.s = nil
+    # TODO ATTENTION!
+    # Uncommenting the following line will lead to a GC heap corruption.
+    # Most likely this leads to Nim collecting some object prematurely.
+    # h.s = nil
+    # We work-around the problem through more indirect incapacitatation
+    # of the stream object:
+    h.s.preventFurtherReading()
 
 converter implicitDeref*(h: InputStreamHandle): InputStream =
   h.s

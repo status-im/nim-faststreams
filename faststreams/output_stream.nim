@@ -114,11 +114,13 @@ proc flipPage(s: OutputStream) =
   s.endPos += s.pageSize
 
 proc addPage(s: OutputStream) =
+  doAssert s.pageSize > 0
   s.pages.addLast OutputPage(buffer: newString(s.pageSize),
                              startOffset: 0)
   s.flipPage
 
 proc initWithSinglePage*(s: OutputStream) =
+  s.pages = initDeque[OutputPage]()
   s.addPage()
   s.cursor.stream = s
 
