@@ -176,7 +176,7 @@ proc readable*(s: InputStream, n: int): bool =
   if distance(s.head, s.bufferEnd) >= n:
     return true
 
-  if s.vtable == nil:
+  if s.vtable == nil or s.vtable.readSync == nil:
     return false
 
   # TODO
