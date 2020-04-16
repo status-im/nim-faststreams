@@ -67,11 +67,10 @@ const
     # The goal is to make perfect page-aligned allocations
   defaultPageSize = 4096 - nimAllocatorMetadataSize - 1 # 1 byte for the null terminator
 
-proc close*(s: var OutputStream) {.raises: [IOError, Defect].} =
+proc close*(s: OutputStream) {.raises: [IOError, Defect].} =
   if s != nil:
     if s.vtable != nil and s.vtable.closeSync != nil:
       s.vtable.closeSync(s)
-    s = nil
 
 proc `=destroy`*(h: var OutputStreamHandle) {.raises: [Defect].} =
   if h.s != nil:
@@ -83,7 +82,7 @@ proc `=destroy`*(h: var OutputStreamHandle) {.raises: [Defect].} =
         # If the user wanted to handle the error, they would have called
         # `close` manually.
         discard # TODO
-    h.s = nil
+    # h.s = nil
 
 converter implicitDeref*(h: OutputStreamHandle): OutputStream =
   h.s

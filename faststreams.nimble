@@ -7,7 +7,7 @@ description   = "Nearly zero-overhead input/output streams for Nim"
 license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
-requires "nim >= 0.17.0",
+requires "nim >= 1.2.0",
          "stew",
          "chronos"
 

@@ -53,16 +53,17 @@ const
     # The goal is to make perfect page-aligned allocations
   # defaultPageSize = 4096 - nimAllocatorMetadataSize
 
-proc close*(s: var InputStream) {.raises: [IOError, Defect].} =
-  if s != nil:
-    if s.vtable != nil and s.vtable.closeSync != nil:
-      s.vtable.closeSync(s)
-    s = nil
-
 proc preventFurtherReading(s: InputStream) =
   s.vtable = nil
   s.head = nil
   s.bufferEnd = nil
+
+proc close*(s: InputStream) {.raises: [IOError, Defect].} =
+  if s != nil:
+    if s.vtable != nil and s.vtable.closeSync != nil:
+      s.vtable.closeSync(s)
+
+    s.preventFurtherReading()
 
 proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
   if h.s != nil:
