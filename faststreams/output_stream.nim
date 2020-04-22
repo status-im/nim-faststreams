@@ -72,6 +72,11 @@ proc close*(s: OutputStream) {.raises: [IOError, Defect].} =
     if s.vtable != nil and s.vtable.closeSync != nil:
       s.vtable.closeSync(s)
 
+# TODO
+# The destructors are currently disabled because they seem to cause
+# mysterious segmentation faults related to corrupted GC internal
+# data structures.
+#[
 proc `=destroy`*(h: var OutputStreamHandle) {.raises: [Defect].} =
   if h.s != nil:
     if h.s.vtable != nil and h.s.vtable.closeSync != nil:
@@ -83,6 +88,7 @@ proc `=destroy`*(h: var OutputStreamHandle) {.raises: [Defect].} =
         # `close` manually.
         discard # TODO
     # h.s = nil
+]#
 
 converter implicitDeref*(h: OutputStreamHandle): OutputStream =
   h.s

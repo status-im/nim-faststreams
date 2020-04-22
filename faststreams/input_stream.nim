@@ -65,6 +65,11 @@ proc close*(s: InputStream) {.raises: [IOError, Defect].} =
 
     s.preventFurtherReading()
 
+# TODO
+# The destructors are currently disabled because they seem to cause
+# mysterious segmentation faults related to corrupted GC internal
+# data structures.
+#[
 proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
   if h.s != nil:
     if h.s.vtable != nil and h.s.vtable.closeSync != nil:
@@ -82,6 +87,7 @@ proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
     # We work-around the problem through more indirect incapacitatation
     # of the stream object:
     h.s.preventFurtherReading()
+]#
 
 converter implicitDeref*(h: InputStreamHandle): InputStream =
   h.s
