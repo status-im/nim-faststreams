@@ -1,3 +1,5 @@
+{.used.}
+
 import
   std/[unittest, strutils, base64],
   ../faststreams/pipelines,
@@ -13,7 +15,7 @@ type
 
 proc upcaseAllCharacters(i: InputStream, o: OutputStream) =
   while i.readable:
-    o.append toUpperAscii(char i.read())
+    o.write toUpperAscii(char i.read())
 
 template timeit(timerVar: var Nanos, code: untyped) =
   let t0 = getTicks()
@@ -40,7 +42,7 @@ suite "pipelines":
 
     timeIt times.fsPipeline:
       var memOut = memoryOutput()
-      executePipeline(memoryInput(loremIpsum),
+      executePipeline(unsafeMemoryInput(loremIpsum),
                       upcaseAllCharacters,
                       base64encode,
                       base64decode,

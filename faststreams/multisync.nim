@@ -1,6 +1,6 @@
 import
   stew/shims/macros,
-  async_backend, input_stream, output_stream
+  async_backend, inputs, outputs
 
 macro fsMultiSync*(body: untyped) =
   # We will produce an identical copy of the annotated proc,

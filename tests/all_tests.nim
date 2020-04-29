@@ -1,5 +1,6 @@
 import
-  test_input_stream,
-  test_output_stream,
-  test_pipelines
+  test_inputs,
+  test_outputs,
+  test_pipelines,
+  test_readme_examples
 

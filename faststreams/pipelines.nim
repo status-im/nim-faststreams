@@ -1,9 +1,9 @@
 import
   macros,
-  input_stream, output_stream
+  inputs, outputs
 
 export
-  input_stream, output_stream
+  inputs, outputs
 
 macro executePipeline*(start: InputStream, steps: varargs[untyped]) =
   var input = start
@@ -21,7 +21,7 @@ macro executePipeline*(start: InputStream, steps: varargs[untyped]) =
       `step`(`input`, `outputVar`)
 
     input = quote do:
-      memoryInput(getOutput(`outputVar`))
+      unsafeMemoryInput(getOutput(`outputVar`))
 
   if defined(debugMacros) or defined(debugPipelines):
     echo result.repr

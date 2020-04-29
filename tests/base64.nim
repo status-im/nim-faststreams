@@ -13,8 +13,6 @@ const
   invalidChar = 255
   paddingByte = byte('=')
 
-template encodeSize(size: int): int = (size * 4 div 3) + 6
-
 proc base64encode*(i: InputStream, o: OutputStream) =
   var
     n: uint32
@@ -25,7 +23,7 @@ proc base64encode*(i: InputStream, o: OutputStream) =
     n = exp
 
   template outputChar(x: typed) =
-    o.append cb64[x and 63]
+    o.write cb64[x and 63]
 
   while i.readable(3):
     inputByte(b shl 16)
@@ -43,12 +41,12 @@ proc base64encode*(i: InputStream, o: OutputStream) =
       outputChar(n shr 18)
       outputChar(n shr 12)
       outputChar(n shr 6)
-      o.append paddingByte
+      o.write paddingByte
     else:
       outputChar(n shr 18)
       outputChar(n shr 12)
-      o.append paddingByte
-      o.append paddingByte
+      o.write paddingByte
+      o.write paddingByte
 
 proc initDecodeTable*(): array[256, char] =
   # computes a decode table at compile time
@@ -80,11 +78,11 @@ proc base64decode*(i: InputStream, o: OutputStream) =
       raiseInvalidChar(c, i.pos - 1)
 
   template outputChar(x: untyped) =
-    o.append char(x and 255)
+    o.write char(x and 255)
 
   let inputLen = i.len
-  if inputLen != lengthUnknown:
-    o.prepareRunway decodeSize(inputLen)
+  if inputLen.isSome:
+    o.ensureRunway decodeSize(inputLen.get)
 
   # hot loop: read 4 characters at at time
   while i.readable(8):
