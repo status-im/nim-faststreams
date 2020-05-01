@@ -37,6 +37,8 @@ else:
 template fsTranslateErrors*(errMsg: string, body: untyped) =
   try:
     body
+  except IOError as err:
+    raise err
   except Exception as err:
     if err[] of Defect:
       raise (ref Defect)(err)

@@ -22,10 +22,10 @@ type
 
   AsyncInputStream* {.borrow: `.`.} = distinct InputStream
 
-  ReadSyncProc* = proc (s: InputStream)
+  ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                        {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-  ReadAsyncProc* = proc (s: InputStream): Future[void]
+  ReadAsyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
   CloseSyncProc* = proc (s: InputStream)
@@ -208,18 +208,21 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
   ## buffers and that can be consumed with `read` or `advance`.
   result = s.span.len
   if s.buffers != nil:
-    result += s.buffers.totalBytesRead - s.spanEndPos
+    result += s.buffers.totalBufferredBytes
+    # result += s.buffers.totalBytesRead - s.spanEndPos
 
 template totalUnconsumedBytes*(s: AsyncInputStream): Natural =
   ## Alias for InputStream.totalUnconsumedBytes
   totalUnconsumedBytes InputStream(s)
 
 let FileInputVTable = InputStreamVTable(
-  readSync: proc (s: InputStream)
+  readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     let file = FileInputStream(s).file
-    s.buffers.writeToSpan(span):
-      file.readBuffer(span.startAddr, span.len)
+    implementSingleRead(s.buffers, dst, dstLen,
+                        {partialReadIsEof},
+                        readStartAddr, readLen):
+      file.readBuffer(readStartAddr, readLen)
   ,
   getLenSync: proc (s: InputStream): Natural
                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
@@ -296,26 +299,24 @@ proc flipPage(s: InputStream) =
   s.span = s.buffers[0].span
   s.spanEndPos += s.span.len
 
-proc continueAfterRead(s: InputStream): bool =
+proc continueAfterRead(s: InputStream, bytesRead: Natural): bool =
   # Please note that this is extracted into a proc only to reduce the code
   # that ends up inlined into async procs by `bufferMoreDataImpl`.
   # The inlining itself is required to support the await-free operation of
   # the `readable` APIs.
-  let firstReadPage = s.buffers[0]
-
-  s.span = firstReadPage.span
-  let bytesRead = s.span.len
-  s.spanEndPos += bytesRead
 
   # The read might have been incomplete which signals the EOF of the stream.
   # If this is the case, we disconnect the input device which prevents any
   # further attempts to read from it:
   if wasEofReached(s.buffers):
-    s.disconnectInputDevice()
+    disconnectInputDevice(s)
 
-  # If we read some bytes anyway, we tell the user code that our buffers
-  # contain some unconsumed data:
-  bytesRead > 0
+  if bytesRead > 0:
+    s.span = s.buffers.getReadableSpan()
+    s.spanEndPos += s.span.len
+    return true
+  else:
+    return false
 
 template bufferMoreDataImpl(s, awaiter, readOp: untyped): bool =
   # This template is always called when the current page has been
@@ -339,8 +340,7 @@ template bufferMoreDataImpl(s, awaiter, readOp: untyped): bool =
       # the read was successful. In `continueAfterRead`, we examine if
       # EOF was reached, but please note that some data might have been
       # read anyway:
-      awaiter s.vtable.readOp(s)
-      continueAfterRead(s)
+      continueAfterRead(s, awaiter s.vtable.readOp(s, nil, 0))
 
 proc bufferMoreDataSync(s: InputStream): bool =
   # This proc exists only to avoid inlining of the code of
@@ -401,8 +401,14 @@ template readable*(sp: AsyncInputStream): bool =
   else:
     bufferMoreDataImpl(s, fsAsync, readAsync)
 
+func continueAfterReadN(s: InputStream,
+                        runwayBeforeRead, bytesRead: Natural) =
+  if runwayBeforeRead == 0 and bytesRead > 0:
+    s.span = s.buffers.getReadableSpan()
+    s.spanEndPos += s.span.len
+
 template readableNImpl(s, n, awaiter, readOp: untyped): bool =
-  let runway = s.totalUnconsumedBytes
+  let runway = totalUnconsumedBytes(s)
 
   if runway >= n:
     true
@@ -410,22 +416,23 @@ template readableNImpl(s, n, awaiter, readOp: untyped): bool =
     false
   else:
     var
-      bytesDeficit = n - runway
-      targetBytesRead = s.buffers.totalBytesRead + bytesDeficit
       res = false
+      bytesRead = Natural 0
+      bytesDeficit = n - runway
 
     while true:
-      awaiter s.vtable.readOp(s)
+      bytesRead += awaiter s.vtable.readOp(s, nil, bytesDeficit)
 
       if wasEofReached(s.buffers):
-        s.disconnectInputDevice()
-        res = s.buffers.totalBytesRead >= targetBytesRead
+        disconnectInputDevice(s)
+        res = bytesRead >= bytesDeficit
         break
 
-      if s.buffers.totalBytesRead >= targetBytesRead:
+      if bytesRead >= bytesDeficit:
         res = true
         break
 
+    continueAfterReadN(s, runway, bytesRead)
     res
 
 proc readable*(s: InputStream, n: int): bool =
@@ -502,14 +509,89 @@ proc read*(s: InputStream): byte =
 template read*(s: AsyncInputStream): byte =
   read InputStream(s)
 
-proc readIntoEx*(s: InputStream, target: var openarray[byte]): int =
+proc drainBuffersInto(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natural =
+  var
+    dst = dstAddr
+    remainingBytes = dstLen
+    runway = s.span.len
+
+  if runway >= remainingBytes:
+    copyMem(dst, s.span.startAddr, remainingBytes)
+    s.span.bumpPointer remainingBytes
+    return dstLen
+  elif runway > 0:
+    copyMem(dst, s.span.startAddr, runway)
+    dst = offset(dst, runway)
+    remainingBytes -= runway
+
+  if s.buffers != nil:
+    # Since we reached the end of the current page,
+    # we have to do the equivalent of `flipPage`:
+    if s.buffers.len > 0:
+      discard s.buffers.popFirst()
+
+    for page in consumePages(s.buffers):
+      let
+        pageStart = page.pageStartAddr
+        pageLen = page.endOffset - page.startOffset
+
+      if pageLen > remainingBytes:
+        # This page has enough data to fill the rest of the buffer:
+        copyMem(dst, pageStart, remainingBytes)
+        page.startOffset += remainingBytes
+
+        # This page is partially consumed now and we must set our
+        # span to point to its remaining contents. We also need to
+        # know how much our position in the stream has advanced:
+        let bytesDrainedFromBufers = dstLen - runway
+        s.span = page.span
+        s.spanEndPos += bytesDrainedFromBufers + s.span.len
+
+        # We return the length of the buffer, which means that is
+        # has been fully populated:
+        return dstLen
+      else:
+        copyMem(dst, pageStart, pageLen)
+        remainingBytes -= pageLen
+        dst = offset(dst, pageLen)
+
+  # We've completerly drained the current span and all the buffers,
+  # so we set the span to a pristine state that will trigger a new
+  # read on the next interaction with the stream.
+  s.span = default(PageSpan)
+
+  # We failed to populate the entire buffer
+  return dstLen - remainingBytes
+
+template readIntoExImpl(s: InputStream,
+                        dst: ptr byte, dstLen: Natural,
+                        awaiter, readOp: untyped): Natural =
+  var bytesRead = drainBuffersInto(s, dst, dstLen)
+
+  while bytesRead < dstLen:
+    let
+      bytesDeficit = dstLen - bytesRead
+      adjustedDst = offset(dst, bytesRead)
+
+    bytesRead += awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
+
+    if wasEofReached(s.buffers):
+      disconnectInputDevice(s)
+      break
+
+  s.spanEndPos += bytesRead
+  bytesRead
+
+proc readIntoEx*(s: InputStream, dst: var openarray[byte]): int =
   ## Read data into the destination buffer.
   ##
   ## Returns the number of bytes that were successfully
   ## written to the buffer. The function will return a
   ## number smaller than the buffer length only if EOF
   ## was reached before the buffer was fully populated.
-  discard
+  let dstAddr = addr dst[0]
+  let dstLen = dst.len
+  readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
 
 proc readInto*(s: InputStream, target: var openarray[byte]): bool =
   ## Read data into the destination buffer.
@@ -519,7 +601,14 @@ proc readInto*(s: InputStream, target: var openarray[byte]): bool =
   ## regarding the number of bytes read, see `readIntoEx`.
   s.readIntoEx(target) == target.len
 
-template readInto*(s: AsyncInputStream, target: var openarray[byte]): bool =
+template readIntoEx*(sp: AsyncInputStream, dst: var openarray[byte]): int =
+  let s = sp
+  # BEWARE! `openArrayToPair` here is needed to avoid
+  # double evaluation of the `dst` expression:
+  let (dstAddr, dstLen) = openArrayToPair(dst)
+  readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync)
+
+template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
   ## Asynchronously read data into the destination buffer.
   ##
   ## Returns `false` if EOF was reached before the buffer
@@ -529,16 +618,84 @@ template readInto*(s: AsyncInputStream, target: var openarray[byte]): bool =
   ## If there are enough bytes already buffered by the stream,
   ## the expression will complete immediately.
   ## Otherwise, it will await more bytes to become available.
-  discard
 
-proc checkReadAhead(s: InputStream, n: Natural): ptr byte =
-  # TODO: handle multi-page
-  result = s.span.startAddr
-  doAssert s.span.len >= n
-  bumpPointer s.span, n
+  let s = sp
+  # BEWARE! `openArrayToPair` here is needed to avoid
+  # double evaluation of the `dst` expression:
+  let (dstAddr, dstLen) = openArrayToPair(dst)
+  readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync) == dstLen
 
-template read*(s: InputStream, n: Natural): auto =
-  makeOpenArray(checkReadAhead(s, n), n)
+proc readOnce*(sp: AsyncInputStream): Future[Natural] =
+  let s = InputStream(sp)
+  doAssert s.buffers != nil and s.vtable != nil
+  s.vtable.readAsync(s, nil, 0)
+
+proc getBestRunway(s: InputStream): Natural =
+  result = s.span.len
+  if result == 0:
+    if s.buffers != nil and s.buffers.len > 1:
+      s.flipPage
+      result = s.span.len
+
+when defined(windows):
+  proc alloca(n: int): ptr byte {.importc, header: "<malloc.h>".}
+else:
+  proc alloca(n: int): ptr byte {.importc, header: "<alloca.h>".}
+
+template allocHeapMem(tmpSeq: var seq[byte], n, _: Natural): ptr byte =
+  tmpSeq.setLen(n)
+  addr tmpSeq[0]
+
+template allocStackMem(tmpSeq: var seq[byte], _, n: Natural): ptr byte =
+  alloca(n)
+
+template readNImpl(sp: InputStream,
+                   np: Natural,
+                   allocMem: untyped): openarray[byte] =
+  let
+    s = sp
+    n = np
+    runway = getBestRunway(s)
+
+  # Since Nim currently doesn't allow the `makeOpenArray` calls bellow
+  # to appear in different branches of an if statement, the code must
+  # be written in this branch-free linear fashion. The `dataCopy` seq
+  # may remain empty in the case where we use stack memory or return
+  # an `openarray` from the existing span.
+  var tmpSeq: seq[byte]
+  var startAddr: ptr byte
+
+  if n > runway:
+    startAddr = allocMem(tmpSeq, n, np)
+    doAssert drainBuffersInto(s, startAddr, n) == n
+  else:
+    startAddr = s.span.startAddr
+    bumpPointer s.span, n
+
+  makeOpenArray(startAddr, n)
+
+template read*(sp: InputStream, np: static Natural): openarray[byte] =
+  const n = np
+  when n < maxStackUsage:
+    readNImpl(sp, n, allocStackMem)
+  else:
+    readNImpl(sp, n, allocHeapMem)
+
+template read*(s: InputStream, n: Natural): openarray[byte] =
+  readNImpl(s, n, allocHeapMem)
+
+template read*(s: AsyncInputStream, n: Natural): openarray[byte] =
+  read InputStream(s), n
+
+proc lookAheadMatch*(s: InputStream, data: openarray[byte]): bool =
+  for i in 0 ..< data.len:
+    if s.peekAt(i) != data[i]:
+      return false
+
+  return true
+
+template lookAheadMatch*(s: AsyncInputStream, data: openarray[byte]): bool =
+  lookAheadMatch InputStream(s)
 
 proc next*(s: InputStream): Option[byte] =
   if readable(s):

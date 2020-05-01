@@ -9,6 +9,7 @@ skipDirs      = @["tests"]
 
 requires "nim >= 1.2.0",
          "stew",
+         "testutils",
          "chronos"
 
 task test, "Run all tests":

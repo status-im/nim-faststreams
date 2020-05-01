@@ -35,10 +35,10 @@ type
 
   AsyncOutputStream* {.borrow: `.`.} = distinct OutputStream
 
-  WriteSyncProc* = proc (s: OutputStream, buf: pointer, bufLen: Natural)
+  WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural)
                         {.nimcall, gcsafe, raises: [IOError, Defect].}
 
-  WriteAsyncProc* = proc (s: OutputStream, buf: pointer, bufLen: Natural): Future[void]
+  WriteAsyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
                          {.nimcall, gcsafe, raises: [IOError, Defect].}
 
   FlushSyncProc* = proc (s: OutputStream)
@@ -174,22 +174,13 @@ template ensureRunway*(s: AsyncOutputStream, neededRunway: Natural) =
   ensureRunway OutputStream(s, neededRunway)
 
 let FileOutputVTable = OutputStreamVTable(
-  writeSync: proc (s: OutputStream, buf: pointer, bufLen: Natural)
+  writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var file = FileOutputStream(s).file
 
-    template fail =
-      raise newException(IOError, "Failed to write OutputStream page.")
-
-    if s.buffers != nil:
-      s.buffers.consumeAllPages(pageAddr, pageLen):
-        let written = file.writeBuffer(pageAddr, pageLen)
-        if written != pageLen: fail()
-
-    if bufLen > 0:
-      doAssert buf != nil
-      var written = file.writeBuffer(buf, bufLen)
-      if written != bufLen: fail()
+    implementWrites(s.buffers, src, srcLen, "FILE",
+                    writeStartAddr, writeLen):
+      file.writeBuffer(writeStartAddr, writeLen)
   ,
   flushSync: proc (s: OutputStream)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
@@ -605,11 +596,12 @@ template consumeOutputs*(sp: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeOutputs` on an unbuffered stream
   ## or an unsafe memory stream is considered a Defect.
   ##
-  ## Before consuming the outputs, all outstanding delayed writes must be finalized.
+  ## Before consuming the outputs, all outstanding delayed writes must
+  ## be finalized.
   let s = sp
   doAssert s.extCursorsCount == 0 and s.buffers != nil
 
-  consumeAllPages(s.buffers, pageStartAddr, pageLen):
+  for pageStartAddr, pageLen in consumePageBuffers(s.buffers):
     template bytesVar: untyped =
       makeOpenArray(pageStartAddr, pageLen)
 
@@ -619,15 +611,20 @@ template consumeContiguousOutput*(sp: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeContiguousOutput` on an unbuffered stream
   ## or an unsafe memory stream is considered a Defect.
   ##
-  ## Before consuming the output, all outstanding delayed writes must be finalized.
+  ## Before consuming the output, all outstanding delayed writes must
+  ## be finalized.
   ##
 
-  # TODO: This code is a bit too much to be inlined. Maybe this should be a proc
-  # with a callback, but this will restrict the types of variables it can write to.
-  # OTOH, perhaps only `consumeAllPages` is the offending part.
+  # TODO: This code is a bit too much to be inlined. Maybe this should be
+  # a proc with a callback, but this will restrict the types of variables
+  # it can write to. OTOH, perhaps only `consumePageBuffers` is the offending
+  # part.
   var
     s = sp
-    contigiousBytes: string # this may remain null
+    contigiousBytes: string
+      # this may remain null
+      # We are using a string, because `newStringOfCap` doesn't zero out
+      # the memory. TODO check if the same is true for `newSeqOfCap`.
     bytesPtr: ptr byte
     bytesLen: int
 
@@ -643,7 +640,7 @@ template consumeContiguousOutput*(sp: OutputStream, bytesVar, body: untyped) =
   else:
     contigiousBytes = newStringOfCap(s.pos)
 
-    consumeAllPages(s.buffers, pageStartAddr, pageLen):
+    for pageStartAddr, pageLen in consumePageBuffers(s.buffers):
       contigiousBytes.add makeOpenArray(cast[ptr char](pageStartAddr), pageLen)
 
     bytesPtr = addr contigiousBytes[0]
@@ -665,7 +662,7 @@ proc getOutput*(s: OutputStream, T: type string): string =
 
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
-    if page.kind == stringPage and page.startOffset == 0:
+    if page.startOffset == 0:
       result.swap page.data[]
       result.setLen page.endOffset
       # We clear the buffers, so the stream will be in pristine state.

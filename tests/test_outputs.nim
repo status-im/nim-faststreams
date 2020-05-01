@@ -166,11 +166,11 @@ suite "output stream":
     fileStream.write delayedWriteContent
     streamWritingToExistingBuffer.write delayedWriteContent
 
-    var totalBytesWritten = 0
+    var bytesWritten = 0
     for i, count in [2]: # 12, 342, 2121, 23, 1, 34012, 932]:
       output repeat(byte(i), count)
-      totalBytesWritten += count
-      check memStream.pos - cursorStart == totalBytesWritten
+      bytesWritten += count
+      check memStream.pos - cursorStart == bytesWritten
 
     cursor.finalWrite delayedWriteContent
 

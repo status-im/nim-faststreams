@@ -20,40 +20,44 @@ const
   closingErrMsg = "Failed to close Chronos transport"
   writeIncompleteErrMsg = "Failed to write all bytes to Chronos transport"
 
-proc fsCloseWait(t: StreamTransport) {.async, raises: [Defect, IOError].} =
+proc chronosCloseWait(t: StreamTransport) {.async, raises: [Defect, IOError].} =
   fsTranslateErrors closingErrMsg:
     await t.closeWait()
 
-proc fsReadOnce(t: StreamTransport,
-                buffer: ptr byte, bufSize: int)
-               {.raises: [Defect, IOError], async.} =
+proc chronosReadOnce(s: ChronosInputStream, dst: pointer, dstLen: Natural): Future[Natural]
+                    {.raises: [IOError, Defect], async.} =
   fsTranslateErrors readingErrMsg:
-    buffers.writeToSpan(span):
-      await t.readOnce(span.startAddr, span.len)
+    return implementSingleRead(s.buffers, dst, dstLen, {},
+                               readStartAddr, readLen):
+      await s.transport.readOnce(readStartAddr, readLen)
+
+proc chronosWrites(s: ChronosOutputStream, src: pointer, srcLen: Natural)
+                  {.raises: [IOError, Defect], async.} =
+  fsTranslateErrors writeIncompleteErrMsg:
+    implementWrites(s.buffers, src, srcLen, "StreamTransport"
+                    writeStartAddr, writeLen):
+      await s.transport.write(writeStartAddr, writeLen)
 
 # TODO: Use the Raising type here
 let ChronosInputStreamVTable = InputStreamVTable(
-  readSync: proc (s: InputStream, buffers: PageBuffers)
+  readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var cs = ChronosInputStream(s)
     doAssert cs.allowWaitFor
-
-    fsTranslateErrors readingErrMsg:
-      buffers.writeToSpan(span):
-        waitFor cs.transport.readOnce(span.startAddr, span.len)
+    waitFor chronosReadOnce(cs, dst, dstLen)
   ,
-  readAsync: proc (s: InputStream, buffers: PageBuffers): Future[Natural]
+  readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    ChronosInputStream(s).transport.fsReadOnce(buffers)
+    chronosReadOnce(ChronosInputStream s, dst, dstLen)
   ,
   closeSync: proc (s: InputStream)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     fsTranslateErrors closingErrMsg:
-      ChronosInputStream(s).transport.close()
+      s.closeFut = ChronosInputStream(s).transport.close()
   ,
   closeAsync: proc (s: InputStream): Future[void]
                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    ChronosInputStream(s).transport.fsCloseWait()
+    chronosCloseWait ChronosInputStream(s).transport
 )
 
 func chronosInput*(s: StreamTransport,
@@ -65,49 +69,24 @@ func chronosInput*(s: StreamTransport,
     allowWaitFor: allowWaitFor))
 
 let ChronosOutputStreamVTable = OutputStreamVTable(
-  writePageSync: proc (s: OutputStream, page: openarray[byte])
-                      {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var cs = ChronosOutputStream(s)
     doAssert cs.allowWaitFor
-    let bytesWritten = fsTranslateErrors writingErrMsg:
-      waitFor cs.transport.write(unsafeAddr page[0], page.len)
-    if bytesWritten != page.len:
-      raise newException(IOError, writeIncompleteErrMsg)
+    waitFor chronosWrites(cs, src, srcLen)
   ,
-  writePageAsync: proc (s: OutputStream, buf: pointer, bufLen: int): Future[void]
-                       {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    var
-      cs = ChronosOutputStream(s)
-      retFuture = newFuture[void]("ChronosOutputStream.writePageAsync")
-      writeFut: Future[int]
-
-    proc continuation(udata: pointer) {.gcsafe.} =
-      if writeFut.error != nil:
-        retFuture.fail newException(IOError, writingErrMsg, writeFut.error)
-      elif writeFut.read != bufLen:
-        retFuture.fail newException(IOError, writeIncompleteErrMsg)
-      else:
-        retFuture.complete()
-
-    var writeFut = cs.transport.write(unsafeAddr page[0], page.len)
-    writeFut.addCallback(continuation, nil)
-
-    retFuture.cancelCallback = proc (udata: pointer) {.gcsafe.} =
-      writeFut.removeCallback(continuation, nil)
-
-    return retFuture
-  ,
-  flushSync: proc (s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    discard
-  ,
-  flushAsync: proc (s: OutputStream): Future[void]
+  writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    result = newFuture[void]("ChronosOutputStream.flushAsync")
-    result.complete()
+    chronosWrites(ChronosOutputStream s, src, srcLen)
   ,
-  closeSync: ChronosInputStreamVTable.closeSync,
-  closeAsyncProc: ChronosInputStreamVTable.closeAsyncProc
+  closeSync: proc (s: OutputStream)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    fsTranslateErrors closingErrMsg:
+      s.closeFut = close ChronosOutputStream(s).transport
+  ,
+  closeAsync: proc (s: OutputStream): Future[void]
+                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    chronosCloseWait ChronosOutputtream(s).transport
 )
 
 func chronosOutput*(s: StreamTransport,
