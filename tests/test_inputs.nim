@@ -74,6 +74,11 @@ procSuite "input stream":
       finally:
         close input
 
+  # TODO: fileInput with offset
+  #        - in the middle of the
+  #        - right at the end of the file
+  #        - past the end of the file
+
   asciiTableFileTest "count lines":
     check countLines(input) == 34
 

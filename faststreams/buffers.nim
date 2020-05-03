@@ -3,93 +3,129 @@ import
   stew/[ptrops, ranges/ptr_arith],
   async_backend
 
+export
+  deques
+
 type
   PageSpan* = object
     startAddr*, endAddr*: ptr byte
 
   Page* = object
-    startOffset*: Natural
-    endOffset*: Natural
+    consumedTo*: Natural
+    writtenTo*: Natural
     data*: ref string
 
   PageRef* = ref Page
 
   PageBuffers* = ref object
     pageSize*: Natural
-    maxWriteSize*: Natural
-    backPressureLimit*: Natural
+    maxBufferedBytes*: Natural
 
     queue*: Deque[PageRef]
-    getters: seq[Future[void]]
-    putters: seq[Future[void]]
+    waitingReader*: Future[void]
+    waitingWriter*: Future[void]
 
-    eofReached: bool
-
-    totalBytesRead*: Natural
-    totalBytesWritten*: Natural
+    eofReached*: bool
 
 const
   nimPageSize* = 4096
-  pageMetadataSize* = offsetof(Page, data)
   nimAllocatorMetadataSize* = 32
     # TODO: Get this legally from the Nim allocator.
     # The goal is to make perfect page-aligned allocations
-    # that get fast O(0) treatment.
-  defaultPageSize* = 4096 - (pageMetadataSize + nimAllocatorMetadataSize)
+    # that go through a fast O(0) path in the allocator.
+  defaultPageSize* = 4096 - nimAllocatorMetadataSize
   maxStackUsage* = 16384
 
-proc openArrayToPair*(a: var openarray[byte]): (ptr byte, Natural) =
+when debugHelpers:
+  proc describeBuffers*(context: static string, buffers: PageBuffers) =
+    debugEcho context, " :: buffers"
+    for page in buffers.queue:
+      debugEcho " page ", page.data[][page.consumedTo ..<
+                                      min(page.consumedTo + 16, page.writtenTo)]
+      debugEcho "  len = ", page.data[].len
+      debugEcho "  start = ", page.consumedTo
+      debugEcho "  written to = ", page.writtenTo
+
+  func contents*(buffers: PageBuffers): string =
+    for page in buffers.queue:
+      result.add page.data[][page.consumedTo ..< page.writtenTo - 1]
+else:
+  template describeBuffers*(context: static string, buffers: PageBuffers) =
+    discard
+
+func openArrayToPair*(a: var openarray[byte]): (ptr byte, Natural) =
   (addr a[0], Natural(a.len))
 
-template pageBaseAddr*(page: PageRef): ptr byte =
+template allocationStart*(page: PageRef): ptr byte =
   cast[ptr byte](addr page.data[][0])
 
-func pageStartAddr*(page: PageRef): ptr byte =
-  offset(cast[ptr byte](addr page.data[][0]), page.startOffset)
+func readableStart*(page: PageRef): ptr byte =
+  offset(cast[ptr byte](addr page.data[][0]), page.consumedTo)
 
-func pageEndAddr*(page: PageRef): ptr byte =
-  offset(cast[ptr byte](addr page.data[][0]), page.endOffset)
+func readableEnd*(page: PageRef): ptr byte =
+  offset(cast[ptr byte](addr page.data[][0]), page.writtenTo)
+
+template writableStart*(page: PageRef): ptr byte =
+  readableEnd(page)
+
+func allocationEnd*(page: PageRef): ptr byte =
+  offset(cast[ptr byte](addr page.data[][0]), page.data[].len)
 
 func pageLen*(page: PageRef): Natural =
-  page.endOffset - page.startOffset
+  page.writtenTo - page.consumedTo
 
 template pageChars*(page: PageRef): untyped =
-  let baseAddr = cast[ptr UncheckedArray[char]](pageBaseAddr(page))
-  toOpenArray(baseAddr, page.startOffset, page.endOffset - 1)
+  let baseAddr = cast[ptr UncheckedArray[char]](allocationStart(page))
+  toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
-func span*(page: PageRef, writable: static[bool] = false): PageSpan =
-  let baseAddr = page.pageBaseAddr
-  PageSpan(startAddr: offset(baseAddr, page.startOffset),
-           endAddr: offset(baseAddr, when writable: page.data[].len
-                                     else: page.endOffset))
+func obtainReadableSpan*(page: PageRef, writable: static[bool] = false): PageSpan =
+  let baseAddr = page.allocationStart
+  result = PageSpan(startAddr: offset(baseAddr, page.consumedTo),
+                    endAddr: offset(baseAddr, page.writtenTo))
+  page.consumedTo = page.writtenTo
 
-template writableSpan*(page: PageRef): PageSpan =
-  span(page, writable = true)
+func writableSpan*(page: PageRef): PageSpan =
+  let baseAddr = allocationStart(page)
+  PageSpan(startAddr: offset(baseAddr, page.writtenTo),
+           endAddr: offset(baseAddr, page.data[].len))
+
+func fullSpan*(page: PageRef): PageSpan =
+  let baseAddr = page.allocationStart
+  PageSpan(startAddr: baseAddr, endAddr: offset(baseAddr, page.data[].len))
 
 func initPageBuffers*(pageSize: Natural,
-                      maxWriteSize = high(int)): PageBuffers =
+                      maxBufferedBytes: Natural = 0): PageBuffers =
+  # TODO: remove the unbuferred streams
   if pageSize > 0:
     return PageBuffers(pageSize: pageSize,
-                       maxWriteSize: maxWriteSize)
+                       maxBufferedBytes: maxBufferedBytes)
 
 template allocRef[T: not ref](x: T): ref T =
   let res = new type(x)
   res[] = x
   res
 
+func trackWrittenToEnd*(buffers: PageBuffers) =
+  if buffers.queue.len > 0:
+    let page = buffers.queue.peekLast
+    page.writtenTo = page.data[].len
+
+func trackWrittenTo*(buffers: PageBuffers, spanHeadPos: ptr byte) =
+  if buffers != nil and buffers.queue.len > 0:
+    var topPage = buffers.queue.peekLast
+    topPage.writtenTo = distance(topPage.allocationStart, spanHeadPos)
+
 func addWritablePage*(buffers: PageBuffers, pageSize: Natural): PageRef =
-  result = PageRef(data: allocRef newString(pageSize),
-                   endOffset: pageSize)
+  trackWrittenToEnd(buffers)
+  result = PageRef(data: allocRef newString(pageSize))
   buffers.queue.addLast result
 
 func getWritablePage*(buffers: PageBuffers,
                       preferredSize: Natural): PageRef =
-  if buffers.queue.len == 1:
-    let recycledPage = buffers.queue.peekLast
-    if recycledPage.endOffset == 0 and
-       recycledPage.data[].len == preferredSize:
-      recycledPage.endOffset = recycledPage.data[].len
-      return recycledPage
+  if buffers.queue.len > 0:
+    let lastPage = buffers.queue.peekLast
+    if lastPage.writtenTo < lastPage.data[].len:
+      return lastPage
 
   return addWritablePage(buffers, preferredSize)
 
@@ -97,25 +133,119 @@ func addWritablePage*(buffers: PageBuffers): PageRef =
   buffers.addWritablePage(buffers.pageSize)
 
 template getWritableSpan*(buffers: PageBuffers): PageSpan =
-  getWritablePage(buffers, buffers.pageSize).span(writable = true)
+  let page = getWritablePage(buffers, buffers.pageSize)
+  writableSpan(page)
 
-proc getReadableSpan*(buffers: PageBuffers): PageSpan =
-  if buffers.queue.len > 1:
+func nextReadableSpan*(buffers: PageBuffers, span: var PageSpan) =
+  let
+    firstPage = buffers.queue.peekFirst
+    pageReadableEnd = firstPage.readableEnd
+
+  if span.endAddr == nil:
+    doAssert buffers.queue.len > 0
+    span = obtainReadableSpan buffers.queue[0]
+  elif span.endAddr != pageReadableEnd:
+    # Check whether the span points within the current page:
+    doAssert distance(firstPage.allocationStart, span.endAddr) >= 0 and
+             distance(span.endAddr, pageReadableEnd) >= 0
+    span.endAddr = pageReadableEnd
+    firstPage.consumedTo = firstPage.writtenTo
+  else:
+    doAssert buffers.queue.len > 1
     discard buffers.queue.popFirst
+    span = obtainReadableSpan buffers.queue[0]
 
-  buffers.queue[0].span
+func stringFromBytes(src: pointer, srcLen: Natural): string =
+  result = newString(srcLen)
+  copyMem(addr result[0], src, srcLen)
 
-func ensureRunway*(buffers: PageBuffers, neededRunway: Natural): PageSpan =
-  doAssert buffers.queue.len == 0
-  buffers.pageSize = neededRunway
-  getWritableSpan(buffers)
+func nextAlignedSize*(minSize, pageSize: Natural): Natural =
+  # TODO: This is not perfectly accurate. Revisit later
+  ((minSize div pageSize) + 1) * pageSize
+
+func appendUnbufferedWrite*(buffers: PageBuffers,
+                            src: pointer, srcLen: Natural) =
+  if buffers.queue.len == 0:
+    buffers.queue.addLast PageRef(
+      data: allocRef stringFromBytes(src, srcLen),
+      writtenTo: srcLen)
+  else:
+    var
+      src = src
+      srcLen = srcLen
+      lastPage = buffers.queue.peekLast
+      lastPageLen = lastPage.data[].len
+      unusedBytes = lastPageLen - lastPage.writtenTo
+
+    if unusedBytes > 0:
+      let unusedBytesStart = offset(addr lastPage.data[0], lastPage.writtenTo)
+      if unusedBytes >= srcLen:
+        copyMem(unusedBytesStart, src, srcLen)
+        lastPage.writtenTo += srcLen
+        return
+      else:
+        copyMem(unusedBytesStart, src, unusedBytes)
+        lastPage.writtenTo = lastPageLen
+        src = offset(src, unusedBytes)
+        srcLen -= unusedBytes
+
+    let nextPageSize = nextAlignedSize(srcLen, buffers.pageSize)
+    let nextPage = buffers.addWritablePage(nextPageSize)
+
+    copyMem(addr nextPage.data[0], src, srcLen)
+    nextPage.writtenTo = srcLen
+
+template hasDelayedWritesAtPageStart(page: PageRef): bool =
+  page.consumedTo < 0
+
+func ensureRunway*(buffers: PageBuffers,
+                   currentHeadPos: var PageSpan,
+                   neededRunway: Natural) =
+  if currentHeadPos.startAddr == nil:
+    # This is a brand new stream, just like we recomend.
+    let page = buffers.addWritablePage(neededRunway)
+    currentHeadPos = page.fullSpan
+  else:
+    # This is a more complicated path that should almost never
+    # trigger in practice in a typically implemented code that
+    # calls `ensureRunway` at the beggining of a transformation.
+    doAssert buffers.queue.len > 0
+    let currPage = buffers.queue.peekLast
+
+    if currPage.hasDelayedWritesAtPageStart:
+      # There is not much we can do here. The outstanding cursors
+      # may point to the current page. We won't honor the runway
+      # request.
+      return
+
+    let
+      oldData = currPage.data
+      bytesWrittenToCurrPage = distance(currPage.readableStart,
+                                        currentHeadPos.startAddr)
+      replacementPageSize = neededRunway + bytesWrittenToCurrPage
+
+    currPage.data = allocRef newString(replacementPageSize)
+    currPage.consumedTo = bytesWrittenToCurrPage
+    currPage.writtenTo = bytesWrittenToCurrPage
+
+    # We copy the old data over the new page
+    copyMem(addr currPage.data[][0], addr oldData[][0],
+            bytesWrittenToCurrPage)
+
+    currentHeadPos = currPage.writableSpan
 
 template len*(buffers: PageBuffers): Natural =
   buffers.queue.len
 
-func totalBufferredBytes*(buffers: PageBuffers): Natural =
-  for i in 1 ..< buffers.queue.len:
+func totalBufferedBytes*(buffers: PageBuffers): Natural =
+  for i in 0 ..< buffers.queue.len:
     result += buffers.queue[i].pageLen
+
+func canAcceptWrite*(buffers: PageBuffers, writeSize: Natural): bool =
+  true or # TODO Remove this line
+  buffers.queue.len == 0 or
+  buffers.maxBufferedBytes == 0 or
+  buffers.totalBufferedBytes < buffers.maxBufferedBytes
 
 template popFirst*(buffers: PageBuffers): PageRef =
   buffers.queue.popFirst
@@ -126,23 +256,14 @@ template `[]`*(buffers: PageBuffers, idx: Natural): PageRef =
 func splitLastPageAt*(buffers: PageBuffers, address: ptr byte) =
   var
     topPage = buffers.queue.peekLast
-    newPage = PageRef()
-    splitPosition = distance(topPage.pageBaseAddr, address)
+    splitPosition = distance(topPage.allocationStart, address)
+    newPage = PageRef(
+      data: topPage.data,
+      consumedTo: splitPosition,
+      writtenTo: splitPosition)
 
-  newPage[] = topPage[]
-  topPage.endOffset = splitPosition
-  newPage.startOffset = splitPosition
-
+  topPage.writtenTo = splitPosition
   buffers.queue.addLast newPage
-
-func endLastPageAt*(buffers: PageBuffers, address: ptr byte) =
-  if buffers != nil and buffers.queue.len > 0:
-    var topPage = buffers.queue.peekLast
-    topPage.endOffset = distance(topPage.pageBaseAddr, address)
-
-func nextAlignedSize*(minSize, pageSize: Natural): Natural =
-  # TODO: This is not perfectly accurate. Revisit later
-  ((minSize div pageSize) + 1) * pageSize
 
 iterator consumePages*(buffers: PageBuffers): PageRef =
   doAssert buffers != nil
@@ -161,17 +282,14 @@ iterator consumePages*(buffers: PageBuffers): PageRef =
     discard buffers.queue.popFirst
 
   if recycledPage != nil:
-    recycledPage.startOffset = 0
-    recycledPage.endOffset = 0
+    recycledPage.consumedTo = 0
+    recycledPage.writtenTo = 0
     buffers.queue.addLast recycledPage
 
 iterator consumePageBuffers*(buffers: PageBuffers): (ptr byte, Natural) =
   for page in consumePages(buffers):
-    yield (page.pageStartAddr,
-           Natural(page.endOffset - page.startOffset))
-
-template wasEofReached*(buffers: PageBuffers): bool =
-  buffers.eofReached
+    yield (page.readableStart,
+           Natural(page.writtenTo - page.consumedTo))
 
 # BEWARE! These templates violate the double evaluation
 #         safety measures in order to produce better inlined
@@ -217,15 +335,11 @@ template implementWrites*(buffersParam: PageBuffers,
       let bytesWritten = writeBlock
       # TODO: Can we repair the buffers here?
       if bytesWritten != writeLenVar: raiseError()
-      buffers.totalBytesWritten += bytesWritten
 
   if srcLen > 0:
     doAssert src != nil
     let bytesWritten = writeBlock
     if bytesWritten != writeLenVar: raiseError()
-    # TODO: Fix this after removing the unbuffered streams
-    if buffers != nil:
-      buffers.totalBytesWritten += bytesWritten
 
 type
   ReadFlag* = enum
@@ -253,19 +367,17 @@ template implementSingleRead*(buffersParam: PageBuffers,
       bestPageSize = nextAlignedSize(readLenVar, buffers.pageSize)
       page = getWritablePage(buffers, bestPageSize)
 
-    readStartVar = page.pageStartAddr
-    readLenVar = page.endOffset - page.startOffset
+    readStartVar = writableStart(page)
+    readLenVar = page.data[].len - page.writtenTo
 
     # TODO: what if we exit with an exception here?
     # Are the side-effects of `getWritablePage` above OK to keep?
     bytesRead = readBlock
-    page.endOffset = page.startOffset + bytesRead
+    page.writtenTo += bytesRead
 
   if (bytesRead == 0 and zeroReadIsNotEof notin flags) or
      (partialReadIsEof in flags and bytesRead < readLenVar):
     buffers.eofReached = true
-  else:
-    buffers.totalBytesRead += bytesRead
 
   bytesRead
 

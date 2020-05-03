@@ -1,6 +1,6 @@
 import
-  faststreams/[inputs, outputs]
+  faststreams/[inputs, outputs, pipelines, multisync]
 
 export
-  inputs, outputs
+  inputs, outputs, pipelines, multisync
 

@@ -13,7 +13,12 @@ const
   invalidChar = 255
   paddingByte = byte('=')
 
-proc base64encode*(i: InputStream, o: OutputStream) =
+template encodeSize(size: int): int = (size * 4 div 3) + 6
+
+import
+  ../faststreams/buffers
+
+proc base64encode*(i: InputStream, o: OutputStream) {.fsMultiSync.} =
   var
     n: uint32
     b: uint32
@@ -24,6 +29,10 @@ proc base64encode*(i: InputStream, o: OutputStream) =
 
   template outputChar(x: typed) =
     o.write cb64[x and 63]
+
+  let inputLen = i.len
+  if inputLen.isSome:
+    o.ensureRunway encodeSize(inputLen.get)
 
   while i.readable(3):
     inputByte(b shl 16)
@@ -48,6 +57,8 @@ proc base64encode*(i: InputStream, o: OutputStream) =
       o.write paddingByte
       o.write paddingByte
 
+  close o
+
 proc initDecodeTable*(): array[256, char] =
   # computes a decode table at compile time
   for i in 0 ..< 256:
@@ -63,7 +74,7 @@ proc initDecodeTable*(): array[256, char] =
 const
   decodeTable = initDecodeTable()
 
-proc base64decode*(i: InputStream, o: OutputStream) =
+proc base64decode*(i: InputStream, o: OutputStream) {.fsMultiSync.} =
   proc decodeSize(size: int): int =
     return (size * 3 div 4) + 6
 
@@ -111,4 +122,6 @@ proc base64decode*(i: InputStream, o: OutputStream) =
         outputChar(c shl 6 or d shr 0)
   elif i.readable:
     raise newException(ValueError, "The input stream has insufficient nymber of bytes for base64 decoding")
+
+  close o
 

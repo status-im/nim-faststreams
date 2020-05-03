@@ -1,8 +1,13 @@
 {.used.}
 
 import
-  std/[unittest, strutils, base64],
-  ../faststreams/pipelines,
+  # Std lib:
+  std/[strutils, random, base64, terminal],
+  # Other packages:
+  testutils/unittests,
+  # FastStreams modules:
+  ../faststreams/[pipelines, multisync],
+  # Testing modules:
   ./base64 as fsBase64
 
 include system/timers
@@ -13,17 +18,29 @@ type
     fsAsyncPipeline: Nanos
     stdFunctionCalls: Nanos
 
-proc upcaseAllCharacters(i: InputStream, o: OutputStream) =
+proc upcaseAllCharacters(i: InputStream, o: OutputStream) {.fsMultiSync.} =
+  let inputLen = i.len
+  if inputLen.isSome:
+    o.ensureRunway inputLen.get
+
   while i.readable:
-    o.write toUpperAscii(char i.read())
+    o.write toUpperAscii(i.read.char)
+
+  echo "closing upcase"
+  close o
+
+proc printTimes(t: TestTimes) =
+  styledEcho "  cpu time [FS Sync  ]: ", styleBright, $t.fsPipeline, "ms"
+  styledEcho "  cpu time [FS Async ]: ", styleBright, $t.fsAsyncPipeline, "ms"
+  styledEcho "  cpu time [Std Lib  ]: ", styleBright, $t.stdFunctionCalls, "ms"
 
 template timeit(timerVar: var Nanos, code: untyped) =
   let t0 = getTicks()
   code
   timerVar = int(getTicks() - t0) div 1000000
 
-suite "pipelines":
-  var loremIpsum = """
+procSuite "pipelines":
+  let loremIpsum = """
     Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
     tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim
     veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex
@@ -32,25 +49,83 @@ suite "pipelines":
     cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id
     est laborum.
 
-  """.repeat(100)
+  """
 
-  test "upper-case/base64 pipeline":
+  #[
+  test "upper-case/base64 pipeline benchmark":
     var
       times: TestTimes
       stdRes: string
       fsRes: string
+      fsAsyncRes: string
+
+    let inputText = loremIpsum.repeat(5000)
+
+    when debugHelpers:
+      echo "Input len: ", inputText.len
+      echo "Base 64 len: ", base64.encode(inputText).len
 
     timeIt times.fsPipeline:
-      var memOut = memoryOutput()
-      executePipeline(unsafeMemoryInput(loremIpsum),
-                      upcaseAllCharacters,
-                      base64encode,
-                      base64decode,
-                      memOut)
-      fsRes = memOut.getOutput(string)
+      fsRes = executePipeline(unsafeMemoryInput(inputText),
+                              upcaseAllCharacters,
+                              base64encode,
+                              base64decode,
+                              getOutput string)
+
+    timeIt times.fsAsyncPipeline:
+      fsAsyncRes = waitFor executePipeline(Async unsafeMemoryInput(inputText),
+                                           upcaseAllCharacters,
+                                           base64encode,
+                                           base64decode,
+                                           getOutput string)
 
     timeIt times.stdFunctionCalls:
-      stdRes = base64.decode(base64.encode(toUpperAscii(loremIpsum)))
+      stdRes = base64.decode(base64.encode(toUpperAscii(inputText)))
 
+    check fsAsyncRes == stdRes
     check fsRes == stdRes
+
+    printTimes times
+  ]#
+
+  asyncTest "upper-case/base64 async pipeline":
+    let pipe = asyncPipe()
+    let inputText = repeat(loremIpsum, 8)
+
+    when debugHelpers:
+      echo "Input len: ", inputText.len
+
+    proc pipeFeeder(s: AsyncOutputStream) {.gcsafe, async.} =
+      randomize 1234
+      var pos = 0
+
+      while pos != inputText.len:
+        let bytesToWrite = rand(15)
+
+        if bytesToWrite == 0:
+          s.write inputText[pos]
+          inc pos
+        else:
+          let endPos = min(pos + bytesToWrite, inputText.len)
+          s.writeAndWait inputText[pos ..< endPos]
+          pos = endPos
+
+        let sleep = rand(50) - 45
+        if sleep > 0:
+          echo "written ", pos
+          await sleepAsync(sleep.milliseconds)
+
+      close s
+
+    asyncCheck pipeFeeder(pipe.initWriter)
+
+    let f = executePipeline(pipe.initReader,
+                            upcaseAllCharacters,
+                            base64encode,
+                            base64decode,
+                            getOutput string)
+
+    let fsAsyncres = await f
+
+    check fsAsyncRes == toUpperAscii(inputText)
 

@@ -20,26 +20,28 @@ const
   closingErrMsg = "Failed to close Chronos transport"
   writeIncompleteErrMsg = "Failed to write all bytes to Chronos transport"
 
-proc chronosCloseWait(t: StreamTransport) {.async, raises: [Defect, IOError].} =
+proc chronosCloseWait(t: StreamTransport)
+                     {.async, raises: [Defect, IOError].} =
   fsTranslateErrors closingErrMsg:
     await t.closeWait()
 
-proc chronosReadOnce(s: ChronosInputStream, dst: pointer, dstLen: Natural): Future[Natural]
-                    {.raises: [IOError, Defect], async.} =
+proc chronosReadOnce(s: ChronosInputStream,
+                     dst: pointer, dstLen: Natural): Future[Natural]
+                    {.async, raises: [IOError, Defect].} =
   fsTranslateErrors readingErrMsg:
     return implementSingleRead(s.buffers, dst, dstLen, {},
                                readStartAddr, readLen):
       await s.transport.readOnce(readStartAddr, readLen)
 
 proc chronosWrites(s: ChronosOutputStream, src: pointer, srcLen: Natural)
-                  {.raises: [IOError, Defect], async.} =
+                  {.async, raises: [IOError, Defect].} =
   fsTranslateErrors writeIncompleteErrMsg:
     implementWrites(s.buffers, src, srcLen, "StreamTransport"
                     writeStartAddr, writeLen):
       await s.transport.write(writeStartAddr, writeLen)
 
 # TODO: Use the Raising type here
-let ChronosInputStreamVTable = InputStreamVTable(
+let chronosInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var cs = ChronosInputStream(s)
@@ -61,14 +63,14 @@ let ChronosInputStreamVTable = InputStreamVTable(
 )
 
 func chronosInput*(s: StreamTransport,
-                   pageSize = buffers.defaultPageSize,
+                   pageSize = defaultPageSize,
                    allowWaitFor = false): InputStreamHandle =
-  InputStreamHandle(s: ChronosInputStream(
-    vtable: vtableAddr ChronosInputStreamVTable,
-    pageSize: pageSize,
-    allowWaitFor: allowWaitFor))
+  makeHandle ChronosInputStream(
+    vtable: vtableAddr chronosInputVTable,
+    buffers: initPageBuffers(pageSize),
+    allowWaitFor: allowWaitFor)
 
-let ChronosOutputStreamVTable = OutputStreamVTable(
+let chronosOutputVTable = OutputStreamVTable(
   writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var cs = ChronosOutputStream(s)
@@ -90,17 +92,11 @@ let ChronosOutputStreamVTable = OutputStreamVTable(
 )
 
 func chronosOutput*(s: StreamTransport,
-                    pageSize = buffers.defaultPageSize,
+                    pageSize = defaultPageSize,
                     allowWaitFor = false): OutputStreamHandle =
-  var stream = ChronosOutputStream(
-    vtable: vtableAddr(SnappyStreamVTable),
-    pageSize: pageSize,
-    minWriteSize: 1,
-    maxWriteSize: high(int),
+  makeHandle ChronosOutputStream(
+    vtable: vtableAddr(chronosOuputVTable),
+    buffers: initPageBuffers(pageSize)
     transport: s,
     allowWaitFor: allowWaitFor)
-
-  stream.initWithSinglePage()
-
-  OutputStreamHandle(s: stream)
 

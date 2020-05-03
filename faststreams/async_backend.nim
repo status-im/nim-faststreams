@@ -6,6 +6,8 @@ type
     waitAsyncClose
     dontWaitAsyncClose
 
+const debugHelpers* = defined(debugHelpers)
+
 when faststreams_async_backend == "chronos":
   import
     chronos

@@ -81,10 +81,7 @@ suite "output stream":
 
   template checkOutputsMatch(showResults = false,
                              skipUnbufferedFile = false) =
-    flush fileStream
     close fileStream
-
-    flush unbufferedFileStream
     close unbufferedFileStream
 
     check fileExists(fileOutputPath) and
@@ -122,14 +119,14 @@ suite "output stream":
 
     let outputsMatch =
       nimSeq == makeOpenArray(cast[ptr byte](buffer),
-                              streamWritingToExistingBuffer.pos) and
-      nimSeq == memStreamRes and
-      nimSeq == readFileRes and
-      nimSeq == fileInputRes and
-      nimSeq == memFileInputRes and
-      nimSeq == fileInputWithSmallPagesRes
-
+                              streamWritingToExistingBuffer.pos)
     check outputsMatch
+
+    check nimSeq == memStreamRes
+    check nimSeq == readFileRes
+    check nimSeq == fileInputRes
+    check nimSeq == memFileInputRes
+    check nimSeq == fileInputWithSmallPagesRes
 
     when not skipUnbufferedFile:
       let unbufferedFileRes = readFile(unbufferedFileOutputPath).string.bytes
@@ -236,5 +233,6 @@ suite "output stream":
       finalize dw.cursor
 
     # The final outputs are the same
-    check nimSeq == memStream.getOutput
+    let resultsAreEqual = nimSeq == memStream.getOutput
+    check resultsAreEqual
 

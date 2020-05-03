@@ -21,12 +21,12 @@ macro fsMultiSync*(body: untyped) =
   for i in 1 ..< asyncProcParams.len:
     let paramsDef = asyncProcParams[i]
     let typ = paramsDef[^2]
-    if sameType(typ, bindSym"InputStream"):
+    if eqIdent(typ, "InputStream"):
       paramsDef[^2] = bindSym "AsyncInputStream"
-    elif sameType(typ, bindSym"OutputStream"):
+    elif eqIdent(typ, "OutputStream"):
       paramsDef[^2] = bindSym "AsyncOutputStream"
 
   result = newStmtList(body, asyncProcBody)
-  if defined(debugSupportAsync):
+  when defined(debugSupportAsync):
     echo result.repr
 
