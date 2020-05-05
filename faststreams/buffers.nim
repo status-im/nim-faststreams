@@ -316,31 +316,6 @@ template charsToBytes*(chars: openArray[char]): untyped =
   var charsStart = unsafeAddr chars[0]
   makeOpenArray(cast[ptr byte](charsStart), chars.len)
 
-template implementWrites*(buffersParam: PageBuffers,
-                          srcParam: pointer,
-                          srcLenParam: Natural,
-                          dstDesc: static string,
-                          writeStartVar, writeLenVar,
-                          writeBlock: untyped) =
-  let
-    buffers = buffersParam
-    writeStartVar = srcParam
-    writeLenVar = srcLenParam
-
-  template raiseError =
-    raise newException(IOError, "Failed to write all bytes to " & dstDesc)
-
-  if buffers != nil:
-    for writeStartVar, writeLenVar in consumePageBuffers(s.buffers):
-      let bytesWritten = writeBlock
-      # TODO: Can we repair the buffers here?
-      if bytesWritten != writeLenVar: raiseError()
-
-  if srcLen > 0:
-    fsAssert src != nil
-    let bytesWritten = writeBlock
-    if bytesWritten != writeLenVar: raiseError()
-
 type
   ReadFlag* = enum
     partialReadIsEof

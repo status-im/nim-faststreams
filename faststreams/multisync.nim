@@ -2,6 +2,9 @@ import
   stew/shims/macros,
   async_backend, inputs, outputs
 
+export
+  async_backend
+
 macro fsMultiSync*(body: untyped) =
   # We will produce an identical copy of the annotated proc,
   # but taking async parameters and having the async pragma.
@@ -13,9 +16,9 @@ macro fsMultiSync*(body: untyped) =
 
   # The return types becomes Future[T]
   if asyncProcParams[0].kind == nnkEmpty:
-    asyncProcParams[0] = newTree(nnkBracketExpr, ident"Future", ident"void")
+    asyncProcParams[0] = newTree(nnkBracketExpr, bindSym"Future", ident"void")
   else:
-    asyncProcParams[0] = newTree(nnkBracketExpr, ident"Future", asyncProcParams[0])
+    asyncProcParams[0] = newTree(nnkBracketExpr, bindSym"Future", asyncProcParams[0])
 
   # We replace all stream inputs with their async counterparts
   for i in 1 ..< asyncProcParams.len:

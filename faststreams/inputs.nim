@@ -53,11 +53,11 @@ type
   FileInputStream = ref object of InputStream
     file: File
 
-template Async*(s: InputStream): AsyncInputStream =
-  AsyncInputStream(s)
+template Sync*(s: InputStream): InputStream = s
+template Async*(s: InputStream): AsyncInputStream = AsyncInputStream(s)
 
-template Sync*(s: AsyncInputStream): InputStream =
-  InputStream(s)
+template Sync*(s: AsyncInputStream): InputStream = InputStream(s)
+template Async*(s: AsyncInputStream): AsyncInputStream = s
 
 proc disconnectInputDevice(s: InputStream) =
   # TODO
@@ -578,8 +578,16 @@ proc advance*(s: InputStream) =
   else:
     flipPage s
 
+proc advance*(s: InputStream, n: Natural) =
+  # TODO This is silly, implement it properly
+  for i in 0 ..< n:
+    advance s
+
 template advance*(s: AsyncInputStream) =
   advance InputStream(s)
+
+template advance*(s: AsyncInputStream, n: Natural) =
+  advance InputStream(s), n
 
 proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natural =
   var

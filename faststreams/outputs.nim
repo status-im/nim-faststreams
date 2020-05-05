@@ -12,7 +12,7 @@ import
   buffers, async_backend
 
 export
-  CloseBehavior
+  initPageBuffers, CloseBehavior
 
 type
   OutputStream* = ref object of RootObj
@@ -69,11 +69,11 @@ type
   FileOutputStream = ref object of OutputStream
     file: File
 
-template Async*(s: OutputStream): AsyncOutputStream =
-  AsyncOutputStream(s)
+template Sync*(s: OutputStream): OutputStream = s
+template Async*(s: OutputStream): AsyncOutputStream = AsyncOutputStream(s)
 
-template Sync*(s: AsyncOutputStream): OutputStream =
-  OuputStream(s)
+template Sync*(s: AsyncOutputStream): OutputStream = OutputStream(s)
+template Async*(s: AsyncOutputStream): AsyncOutputStream = s
 
 proc disconnectOutputDevice(s: OutputStream) =
   if s.vtable != nil:
@@ -198,6 +198,31 @@ proc ensureRunway*(s: OutputStream, neededRunway: Natural) =
 
 template ensureRunway*(s: AsyncOutputStream, neededRunway: Natural) =
   ensureRunway OutputStream(s), neededRunway
+
+template implementWrites*(buffersParam: PageBuffers,
+                          srcParam: pointer,
+                          srcLenParam: Natural,
+                          dstDesc: static string,
+                          writeStartVar, writeLenVar,
+                          writeBlock: untyped) =
+  let
+    buffers = buffersParam
+    writeStartVar = srcParam
+    writeLenVar = srcLenParam
+
+  template raiseError =
+    raise newException(IOError, "Failed to write all bytes to " & dstDesc)
+
+  if buffers != nil:
+    for writeStartVar, writeLenVar in consumePageBuffers(s.buffers):
+      let bytesWritten = writeBlock
+      # TODO: Can we repair the buffers here?
+      if bytesWritten != writeLenVar: raiseError()
+
+  if writeLenVar > 0:
+    fsAssert writeStartVar != nil
+    let bytesWritten = writeBlock
+    if bytesWritten != writeLenVar: raiseError()
 
 let fileOutputVTable = OutputStreamVTable(
   writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
@@ -582,6 +607,9 @@ proc writeBytesAsyncImpl(s: OutputStream,
 proc writeBytesAsyncImpl(s: OutputStream,
                          str: string): Future[void] =
   writeBytesAsyncImpl s, toOpenArray(str, 0, str.len - 1)
+
+template writeAndWait*(s: OutputStream, value: untyped) =
+  write s, value
 
 template writeAndWait*(sp: AsyncOutputStream, value: untyped) =
   bind writeBytesAsyncImpl
