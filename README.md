@@ -173,6 +173,9 @@ handle the possible errors from the closing operation.
 Here is an example usage:
 
 ```nim
+import
+  faststreams/inputs
+
 var
   jsonString = "[1, 2, 3]"
   jsonNodes = parseJson(unsafeMemoryInput(jsonString))
@@ -183,6 +186,9 @@ The example above assumes we might have a `parseJson` function accepting an
 `InputStream`. Here how this function could be defined:
 
 ```nim
+import
+  faststreams/inputs
+
 proc scanString(stream: InputStream): JsonToken {.fsMultiSync.} =
   result = newStringToken()
 
@@ -355,6 +361,9 @@ handle the possible errors from the closing operation.
 Here is an example usage:
 
 ```nim
+import
+  faststreams/outputs
+
 type
   ABC = object
     a: int
@@ -371,7 +380,7 @@ let's see how it can be implemented:
 
 ```nim
 import
-  typetraits, faststreams
+  typetraits, faststreams/outputs
 
 proc writeNimRepr*(stream: OutputStream, str: string) =
   stream.write '"'
@@ -425,14 +434,14 @@ context or if a maximum memory usage policy is specified.
 In a non-memory stream, any writes larger than a page or issued through the
 `writeNow` API will be sent to the output device immediately.
 
-#### Delayed Writes
-
 Please note that even in async context, `write` will complete immediately.
 To handle back-pressure properly, use `stream.flush` or `stream.waitForConsumer`
 which will ensure that the buffered data is drained to a specified number of
 bytes before continuing. The rationale here is that introducing an interruption
 point at every `write` produces less optimal code, but if this is desired you
 can use the `stream.writeAndWait` API.
+
+#### Delayed Writes
 
 Many protocols and formats employ fixed-size and variable-size length prefixes
 that have been tradionally difficult to handle because they require you to
