@@ -445,23 +445,22 @@ proc tryMovingToNextPage(c: var WriteCursor) =
   # pre-allocated cursor span, which is considered a Defect (a range error)
   fsAssert false, "Attempt to write past the end of a cursor"
 
-template writeByteImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp: untyped) =
-  if atEnd(s.span):
-    # Unsafe memory outputs don't use pages at all, so if our cursor
-    # reached here, this is a range violation defect:
-    fsAssert canExtendOutput(s)
+template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp: untyped) =
+  # Unsafe memory outputs don't use pages at all, so if our cursor
+  # reached here, this is a range violation defect:
+  fsAssert canExtendOutput(s)
 
-    if s.vtable == nil or s.extCursorsCount > 0:
-      # This is the main cursor of a stream, but we are either not
-      # ready to flush due to outstanding delayed writes or this is
-      # just a memory output stream. In both cases, we just need to
-      # allocate more memory and continue writing:
-      addPage(s)
-    elif s.buffers == nil:
-      awaiter s.vtable.writeOp(nil, unsafeAddr b, 1)
-    else:
-      trackWrittenToEnd(s.buffers)
-      awaiter drainOp(s, nil, 0)
+  if s.vtable == nil or s.extCursorsCount > 0:
+    # This is the main cursor of a stream, but we are either not
+    # ready to flush due to outstanding delayed writes or this is
+    # just a memory output stream. In both cases, we just need to
+    # allocate more memory and continue writing:
+    addPage(s)
+  elif s.buffers == nil:
+    awaiter s.vtable.writeOp(nil, unsafeAddr b, 1)
+  else:
+    trackWrittenToEnd(s.buffers)
+    awaiter drainOp(s, nil, 0)
 
   writeByte(s.span, b)
 
@@ -474,8 +473,15 @@ proc write*(c: var WriteCursor, b: byte) =
 
   writeByte(c.span, b)
 
-proc write*(s: OutputStream, b: byte) =
-  writeByteImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
+proc writeToNewSpan(s: OutputStream, b: byte) =
+  writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
+
+template write*(sp: OutputStream, b: byte) =
+  let s = sp
+  if hasRunway(s.span):
+    writeByte(s.span, b)
+  else:
+    writeToNewSpan(s, b)
 
 proc write*(sp: AsyncOutputStream, b: byte) =
   let s = OutputStream sp
@@ -484,8 +490,11 @@ proc write*(sp: AsyncOutputStream, b: byte) =
   writeByte(s.span, b)
 
 template writeAndWait*(sp: AsyncOutputStream, b: byte) =
-  let s = sp
-  writeByteImpl(s, b, fsAwait, writeAsync, drainAllBuffersAsync)
+  let s = OutputStream sp
+  if hasRunway(s.span):
+    writeByte(s.span, b)
+  else:
+    writeToNewSpanImpl(s, b, fsAwait, writeAsync, drainAllBuffersAsync)
 
 template write*(s: AsyncOutputStream, x: char) =
   write s, byte(x)
