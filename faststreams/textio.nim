@@ -1,6 +1,6 @@
 import
   stew/ptrops,
-  inputs, outputs, buffers, multisync
+  inputs, outputs, buffers, async_backend, multisync
 
 template matchingIntType(T: type int64): type = uint64
 template matchingIntType(T: type int32): type = uint32
@@ -112,7 +112,7 @@ const
   Digits* = {'0'..'9'}
 
 proc readLine*(s: InputStream, keepEol = false): TaintedString =
-  doAssert readableNow(s)
+  fsAssert readableNow(s)
 
   while s.readable:
     let c = s.peek.char
@@ -131,7 +131,7 @@ proc readLine*(s: InputStream, keepEol = false): TaintedString =
 
 proc readUntil*(s: InputStream,
                 sep: openarray[char]): Option[TaintedString] =
-  doAssert readableNow(s)
+  fsAssert readableNow(s)
   var res = ""
   while s.readable(sep.len):
     if s.lookAheadMatch(charsToBytes(sep)):
@@ -150,7 +150,7 @@ iterator lines*(s: InputStream, keepEol = false): TaintedString =
     yield readLine(s, keepEol)
 
 proc readUnsignedInt*(s: InputStream, T: type[CompiledUIntTypes]): T =
-  doAssert s.readable and s.peek.char in Digits
+  fsAssert s.readable and s.peek.char in Digits
 
   template eatDigitAndPeek: char =
     advance s

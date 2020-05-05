@@ -45,7 +45,7 @@ let chronosInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var cs = ChronosInputStream(s)
-    doAssert cs.allowWaitFor
+    fsAssert cs.allowWaitFor
     waitFor chronosReadOnce(cs, dst, dstLen)
   ,
   readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
@@ -74,7 +74,7 @@ let chronosOutputVTable = OutputStreamVTable(
   writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     var cs = ChronosOutputStream(s)
-    doAssert cs.allowWaitFor
+    fsAssert cs.allowWaitFor
     waitFor chronosWrites(cs, src, srcLen)
   ,
   writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]

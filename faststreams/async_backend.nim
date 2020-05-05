@@ -36,6 +36,13 @@ elif faststreams_async_backend in ["std", "asyncdispatch"]:
 else:
   {.fatal: "Unrecognized network backend: " & faststreams_async_backend.}
 
+when defined(danger):
+  template fsAssert*(x) = discard
+  template fsAssert*(x, msg) = discard
+else:
+  template fsAssert*(x) = doAssert(x)
+  template fsAssert*(x, msg) = doAssert(x, msg)
+
 template fsTranslateErrors*(errMsg: string, body: untyped) =
   try:
     body

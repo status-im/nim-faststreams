@@ -142,16 +142,16 @@ func nextReadableSpan*(buffers: PageBuffers, span: var PageSpan) =
     pageReadableEnd = firstPage.readableEnd
 
   if span.endAddr == nil:
-    doAssert buffers.queue.len > 0
+    fsAssert buffers.queue.len > 0
     span = obtainReadableSpan buffers.queue[0]
   elif span.endAddr != pageReadableEnd:
     # Check whether the span points within the current page:
-    doAssert distance(firstPage.allocationStart, span.endAddr) >= 0 and
+    fsAssert distance(firstPage.allocationStart, span.endAddr) >= 0 and
              distance(span.endAddr, pageReadableEnd) >= 0
     span.endAddr = pageReadableEnd
     firstPage.consumedTo = firstPage.writtenTo
   else:
-    doAssert buffers.queue.len > 1
+    fsAssert buffers.queue.len > 1
     discard buffers.queue.popFirst
     span = obtainReadableSpan buffers.queue[0]
 
@@ -209,7 +209,7 @@ func ensureRunway*(buffers: PageBuffers,
     # This is a more complicated path that should almost never
     # trigger in practice in a typically implemented code that
     # calls `ensureRunway` at the beggining of a transformation.
-    doAssert buffers.queue.len > 0
+    fsAssert buffers.queue.len > 0
     let currPage = buffers.queue.peekLast
 
     if currPage.hasDelayedWritesAtPageStart:
@@ -266,7 +266,7 @@ func splitLastPageAt*(buffers: PageBuffers, address: ptr byte) =
   buffers.queue.addLast newPage
 
 iterator consumePages*(buffers: PageBuffers): PageRef =
-  doAssert buffers != nil
+  fsAssert buffers != nil
 
   var recycledPage: PageRef
   while buffers.queue.len > 0:
@@ -337,7 +337,7 @@ template implementWrites*(buffersParam: PageBuffers,
       if bytesWritten != writeLenVar: raiseError()
 
   if srcLen > 0:
-    doAssert src != nil
+    fsAssert src != nil
     let bytesWritten = writeBlock
     if bytesWritten != writeLenVar: raiseError()
 

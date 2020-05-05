@@ -26,7 +26,6 @@ proc upcaseAllCharacters(i: InputStream, o: OutputStream) {.fsMultiSync.} =
   while i.readable:
     o.write toUpperAscii(i.read.char)
 
-  echo "closing upcase"
   close o
 
 proc printTimes(t: TestTimes) =
@@ -51,7 +50,6 @@ procSuite "pipelines":
 
   """
 
-  #[
   test "upper-case/base64 pipeline benchmark":
     var
       times: TestTimes
@@ -61,9 +59,8 @@ procSuite "pipelines":
 
     let inputText = loremIpsum.repeat(5000)
 
-    when debugHelpers:
-      echo "Input len: ", inputText.len
-      echo "Base 64 len: ", base64.encode(inputText).len
+    timeIt times.stdFunctionCalls:
+      stdRes = base64.decode(base64.encode(toUpperAscii(inputText)))
 
     timeIt times.fsPipeline:
       fsRes = executePipeline(unsafeMemoryInput(inputText),
@@ -79,21 +76,14 @@ procSuite "pipelines":
                                            base64decode,
                                            getOutput string)
 
-    timeIt times.stdFunctionCalls:
-      stdRes = base64.decode(base64.encode(toUpperAscii(inputText)))
-
     check fsAsyncRes == stdRes
     check fsRes == stdRes
 
     printTimes times
-  ]#
 
   asyncTest "upper-case/base64 async pipeline":
     let pipe = asyncPipe()
-    let inputText = repeat(loremIpsum, 8)
-
-    when debugHelpers:
-      echo "Input len: ", inputText.len
+    let inputText = repeat(loremIpsum, 100)
 
     proc pipeFeeder(s: AsyncOutputStream) {.gcsafe, async.} =
       randomize 1234
@@ -112,7 +102,6 @@ procSuite "pipelines":
 
         let sleep = rand(50) - 45
         if sleep > 0:
-          echo "written ", pos
           await sleepAsync(sleep.milliseconds)
 
       close s

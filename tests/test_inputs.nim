@@ -13,7 +13,7 @@ proc bytes(s: string): seq[byte] =
 
 proc str(bytes: openarray[byte]): string =
   result = newStringOfCap(bytes.len)
-  for b in bytes:
+  for b in items(bytes):
     result.add b.char
 
 proc countLines(s: InputStream): Natural =
@@ -31,13 +31,15 @@ procSuite "input stream":
 
       test "input is not readable with read":
         check not input.readable
-        expect Defect:
-          echo "This read should not complete: ", input.read
+        when not defined(danger):
+          expect Defect:
+            echo "This read should not complete: ", input.read
 
       test "input is not readable with read(n)":
         check not input.readable(10)
-        expect Defect:
-          echo "This read should not complete: ", input.read(10)
+        when not defined(danger):
+          expect Defect:
+            echo "This read should not complete: ", input.read(10)
 
       test "next returns none":
         check input.next.isNone

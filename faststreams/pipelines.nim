@@ -5,11 +5,6 @@ import
 export
   inputs, outputs, async_backend
 
-template clearAndWait(ep: AsyncEvent) =
-  let e = ep
-  clear e
-  await e.wait()
-
 type
   FsAsyncPipe* = ref object
     # TODO: Make these stream handles
@@ -38,22 +33,17 @@ proc pipeRead(s: LayeredInputStream,
     minBytesExpected = max(1, dstLen)
     bytesInBuffersNow = bytesInBuffersAtStart
 
-  describeBuffers "at start", buffers
-
   while bytesInBuffersNow < minBytesExpected:
     awake buffers.waitingWriter
-    echo "About to wait for writer"
     buffers.waitingReader.enterWait "waiting for writer to buffer more data"
-    echo "Awaken from wait"
 
     bytesInBuffersNow = buffers.totalBufferedBytes
     if buffers.eofReached:
-      echo "read bytes ", bytesInBuffersNow - bytesInBuffersAtStart
-      describeBuffers "at end", buffers
       return bytesInBuffersNow - bytesInBuffersAtStart
 
   if dst != nil:
-    doAssert drainBuffersInto(s, cast[ptr byte](dst), dstLen) == dstLen
+    let drained {.used.} = drainBuffersInto(s, cast[ptr byte](dst), dstLen)
+    fsAssert drained == dstLen
 
   awake buffers.waitingWriter
 
@@ -61,7 +51,6 @@ proc pipeRead(s: LayeredInputStream,
 
 proc pipeWrite(s: LayeredOutputStream, src: pointer, srcLen: Natural) {.async.} =
   let buffers = s.buffers
-  echo "pipe write"
   while buffers.canAcceptWrite(srcLen) == false:
     buffers.waitingWriter.enterWait "waiting for reader to drain the buffers"
 
@@ -81,7 +70,7 @@ let pipeInputVTable = InputStreamVTable(
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     fsTranslateErrors "Failed to read from pipe":
       let ls = LayeredInputStream(s)
-      doAssert ls.allowWaitFor
+      fsAssert ls.allowWaitFor
       return waitFor pipeRead(ls, dst, dstLen)
   ,
   readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
@@ -117,7 +106,7 @@ let pipeOutputVTable = OutputStreamVTable(
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     fsTranslateErrors "Failed to write all bytes to pipe":
       var ls = LayeredOutputStream(s)
-      doAssert ls.allowWaitFor
+      fsAssert ls.allowWaitFor
       waitFor pipeWrite(ls, src, srcLen)
   ,
   writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
@@ -146,7 +135,6 @@ let pipeOutputVTable = OutputStreamVTable(
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
 
     s.buffers.eofReached = true
-    echo "writer closes the stream"
 
     fsTranslateErrors "Unexpected error from Future.complete":
       awake s.buffers.waitingReader
@@ -173,7 +161,7 @@ let pipeOutputVTable = OutputStreamVTable(
 func pipeInput*(source: InputStream,
                 pageSize = defaultPageSize,
                 allowWaitFor = false): AsyncInputStream =
-  doAssert pageSize > 0
+  fsAssert pageSize > 0
 
   AsyncInputStream LayeredInputStream(
     vtable: vtableAddr pipeInputVTable,
@@ -199,7 +187,7 @@ proc pipeOutput*(destination: OutputStream,
                  pageSize = defaultPageSize,
                  maxBufferedBytes = defaultPageSize * 4,
                  allowWaitFor = false): AsyncOutputStream =
-  doAssert pageSize > 0
+  fsAssert pageSize > 0
 
   var
     buffers = initPageBuffers pageSize
@@ -231,7 +219,7 @@ proc pipeOutput*(buffers: PageBuffers,
 
 func asyncPipe*(pageSize = defaultPageSize,
                 maxBufferedBytes = defaultPageSize * 4): FsAsyncPipe =
-  doAssert pageSize > 0
+  fsAssert pageSize > 0
   FsAsyncPipe(buffers: initPageBuffers(pageSize, maxBufferedBytes))
 
 func initReader*(pipe: FsAsyncPipe): AsyncInputStream =

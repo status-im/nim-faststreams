@@ -87,7 +87,7 @@ template disconnectOutputDevice(s: AsyncOutputStream) =
   disconnectOutputDevice OutputStream(s)
 
 template flushImpl(s: OutputStream, awaiter, writeOp, flushOp: untyped) =
-  doAssert s.extCursorsCount == 0
+  fsAssert s.extCursorsCount == 0
   if s.vtable != nil:
     if s.buffers != nil:
       trackWrittenTo(s.buffers, s.span.startAddr)
@@ -159,10 +159,6 @@ template canExtendOutput(s: OutputStream): bool =
   # Streams writing to pre-allocated existing buffers cannot be grown
   s != nil and s.buffers != nil
 
-template isExternalCursor(c: var WriteCursor): bool =
-  # Is this the original stream cursor or is it one created by a "delayed write"
-  addr(c) != addr(c.stream.cursor)
-
 proc addPage(s: OutputStream) =
   let
     nextPageSize = s.buffers.pageSize
@@ -175,7 +171,7 @@ template makeHandle*(sp: OutputStream): OutputStreamHandle =
   OutputStreamHandle(s: s)
 
 proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
-  doAssert pageSize > 0
+  fsAssert pageSize > 0
   # We are not creating an initial output page, because `ensureRunway`
   # can determine the most appropriate size.
   makeHandle OutputStream(buffers: initPageBuffers(pageSize))
@@ -196,7 +192,7 @@ proc ensureRunway*(s: OutputStream, neededRunway: Natural) =
     # If you use an unsafe memory output, you must ensure that
     # it will have a large enough size to hold the data you are
     # feeding to it.
-    doAssert s.buffers != nil, "Unsafe memory output of insufficient size"
+    fsAssert s.buffers != nil, "Unsafe memory output of insufficient size"
     s.buffers.ensureRunway(s.span, neededRunway)
     s.spanEndPos += (s.span.len - runway)
 
@@ -246,7 +242,7 @@ template pos*(s: AsyncOutputStream): int =
   pos OutputStream(s)
 
 proc getBuffers*(s: OutputStream): PageBuffers =
-  doAssert s.buffers != nil
+  fsAssert s.buffers != nil
   s.buffers.trackWrittenTo s.span.startAddr
   return s.buffers
 
@@ -334,7 +330,7 @@ proc delayFixedSizeWrite*(s: OutputStream, size: Natural): WriteCursor =
 proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
   ## Please note that using variable sized writes are not supported
   ## for unbuffered streams and unsafe memory inputs.
-  doAssert s.buffers != nil
+  fsAssert s.buffers != nil
 
   let runway = s.span.len
   if maxSize <= runway:
@@ -368,11 +364,11 @@ proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
     s.spanEndPos += nextPageSize
 
 proc finalize*(cursor: var WriteCursor) =
-  doAssert cursor.stream.extCursorsCount > 0
+  fsAssert cursor.stream.extCursorsCount > 0
   dec cursor.stream.extCursorsCount
 
 proc finalWrite*(cursor: var WriteCursor, data: openArray[byte]) =
-  doAssert data.len == cursor.span.len
+  fsAssert data.len == cursor.span.len
   copyMem(cursor.span.startAddr, unsafeAddr data[0], data.len)
   finalize cursor
 
@@ -380,7 +376,7 @@ proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
   template cursor: auto = WriteCursor(c)
 
   let overestimatedBytes = cursor.span.len - data.len
-  doAssert overestimatedBytes >= 0
+  fsAssert overestimatedBytes >= 0
 
   for page in items(cursor.stream.buffers.queue):
     let baseAddr = page.allocationStart
@@ -398,7 +394,7 @@ proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
       finalize cursor
       return
 
-  doAssert false
+  fsAssert false
 
 proc tryMovingToNextPage(c: var WriteCursor) =
   # A split cursor is a fixed-size cursor that ended up on page boundary.
@@ -447,13 +443,13 @@ proc tryMovingToNextPage(c: var WriteCursor) =
   # We didn't find any page that this cursor was ending, so this is not
   # a split cursor. This means that the user just tried to write past the
   # pre-allocated cursor span, which is considered a Defect (a range error)
-  doAssert false, "Attempt to write past the end of a cursor"
+  fsAssert false, "Attempt to write past the end of a cursor"
 
 template writeByteImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp: untyped) =
   if atEnd(s.span):
     # Unsafe memory outputs don't use pages at all, so if our cursor
     # reached here, this is a range violation defect:
-    doAssert canExtendOutput(s)
+    fsAssert canExtendOutput(s)
 
     if s.vtable == nil or s.extCursorsCount > 0:
       # This is the main cursor of a stream, but we are either not
@@ -512,7 +508,7 @@ proc writeToANewPage(s: OutputStream, bytes: openArray[byte]) =
     copyMem(s.span.startAddr, inputPos, runway)
     reduceInput runway
 
-  doAssert s.buffers != nil
+  fsAssert s.buffers != nil
 
   let nextPageSize = nextAlignedSize(inputLen, s.buffers.pageSize)
   let nextPage = s.buffers.addWritablePage(nextPageSize)
@@ -618,7 +614,7 @@ proc writeBytesToCursor(c: var WriteCursor, bytes: openarray[byte]) =
     # On the next page, we have a new runway
     runway = c.span.len
     # The write shouldn't go past the end of the new runway
-    doAssert inputLen <= runway
+    fsAssert inputLen <= runway
     copyMem(c.span.startAddr, inputPos, inputLen)
     c.span.startAddr = offset(c.span.startAddr, inputLen)
 
@@ -644,7 +640,7 @@ template consumeOutputs*(sp: OutputStream, bytesVar, body: untyped) =
   ## Before consuming the outputs, all outstanding delayed writes must
   ## be finalized.
   let s = sp
-  doAssert s.extCursorsCount == 0 and s.buffers != nil
+  fsAssert s.extCursorsCount == 0 and s.buffers != nil
 
   for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
     template bytesVar: untyped =
@@ -673,7 +669,7 @@ template consumeContiguousOutput*(sp: OutputStream, bytesVar, body: untyped) =
     bytesPtr: ptr byte
     bytesLen: int
 
-  doAssert s.extCursorsCount == 0 and s.buffers != nil
+  fsAssert s.extCursorsCount == 0 and s.buffers != nil
 
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
@@ -702,7 +698,7 @@ proc getOutput*(s: OutputStream, T: type string): string =
   ##
   ## Before consuming the output, all outstanding delayed writes must be finalized.
   ##
-  doAssert s.extCursorsCount == 0 and s.buffers != nil
+  fsAssert s.extCursorsCount == 0 and s.buffers != nil
   s.buffers.trackWrittenTo s.span.startAddr
 
   if s.buffers.queue.len == 1:

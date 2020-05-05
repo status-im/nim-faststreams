@@ -33,9 +33,9 @@ in a way that allows the read and write operations to be handled without any
 dynamic dispatch in the majority of cases.
 
 In particular, reading from a `memoryInput` or writing to a `memoryOutput`
-will have the equivalent performance to a loop iterating over an `openarray`
-or another loop populating a pre-allocated `string`. `memFileInput` offers
-similar performance characteristics when working with files. The idiomatic
+will have similar performance to a loop iterating over an `openarray` or
+another loop populating a pre-allocated `string`. `memFileInput` offers
+the same performance characteristics when working with files. The idiomatic
 use of the APIs with the rest of the stream types will result in a highly
 efficient memory allocation patterns and zero-copy performance in a great
 variety of real-world use cases such as:
@@ -90,7 +90,7 @@ efficient and easy to author.
 ### Higher efficiency is possible if we say goodbye to the good old single buffer.
 
 The buffering logic inside the stream divides the data into "pages" which
-are allocated with known fast paths in the Nim allocator and which can be
+are allocated with a known fast path in the Nim allocator and which can be
 efficiently transferred between streams and threads in the layered streams
 scenario or in IPC mechanisms such as `AsyncChannel`. The consuming code can
 be aware of this, but doesn't need to. The most idiomatic usage of the API
@@ -109,19 +109,19 @@ such as:
 
 * Block compressors and Block ciphers
 
-  These can benefit significantly from a more precise control of the size
-  of the buffered pages which can be configured to match the block size
-  of the encoder.
+  These can benefit significantly from a more precise control over
+  the stride of the buffered pages which can be configured to match
+  the block size of the encoder.
 
 * Content with known length
 
-  Some streams have known length which allows us to accurately estimate
+  Some streams have a known length which allows us to accurately estimate
   the size of the transformed content. The `len` and `ensureRunway` APIs
   make sure such cases are handled as optimally as possible.
 
 ## Basic API usage
 
-The FastStreams API consists of 3 major object types:
+The FastStreams API consists of ony few major object types:
 
 ### `InputStream`
 
@@ -141,6 +141,16 @@ of the box the following input stream types:
   For handling strings, sequences and openarrays as an input stream. <br />
   You are responsible for ensuring that the backing buffer won't be invalidated
   while the stream is being used.
+
+* `memoryInput`
+
+  Primarily used to consume the contents written to a previously populated
+  output stream, but it can also be used to consume the contents of strings
+  and sequences in a memory-safe way (by creating a copy).
+
+* `pipeInput` (async)
+
+  For arbitrary conmmunication between a produced and a consumer.
 
 * `chronosInput` (async)
 
@@ -173,7 +183,7 @@ The example above assumes we might have a `parseJson` function accepting an
 `InputStream`. Here how this function could be defined:
 
 ```nim
-proc scanString(stream: InputStream): JsonToken =
+proc scanString(stream: InputStream): JsonToken {.fsMultiSync.} =
   result = newStringToken()
 
   advance stream # skip the opening quote
@@ -197,7 +207,7 @@ proc scanString(stream: InputStream): JsonToken =
 
   error(UnexpectedEndOfFile)
 
-proc nextToken(stream: InputStream): JsonToken =
+proc nextToken(stream: InputStream): JsonToken {.fsMultiSync.} =
   while stream.readable:
     case stream.peek.char
     of '"':
@@ -213,7 +223,7 @@ proc nextToken(stream: InputStream): JsonToken =
 
   return eofToken
 
-proc parseJson(stream: InputStream): JsonNode =
+proc parseJson(stream: InputStream): JsonNode {.fsMultiSync.} =
   while (let token = nextToken(stream); token != eofToken):
     case token
     of numberToken:
@@ -243,7 +253,7 @@ compile to very efficient inlined code that performs nothing more than pointer
 increments and comparisons. This will be true even when working with async
 streams.
 
-The `readable` check is the only place where our code could block (or await).
+The `readable` check is the only place where our code may block (or await).
 Only when all the data in the stream buffers have been consumed, the stream
 will invoke a new read operation on the backing input device and this may
 repopulate the buffers with an arbitrary number of new bytes.
@@ -256,10 +266,52 @@ if you need to store the bytes in an object field or another long-term storage
 location, consider using `stream.readInto(destination)` which may result in
 zero-copy operation. It can also be used to implement unbuffered reading.
 
-In async streams, the `stream.timeoutToNextByte(t)` API can be used to detect
-situations where your communicating party is failing to send data in time.
+#### `AsyncInputStream` and `fsMultiSync`
 
-### `OutputStream`
+An astute reader might have wondered what is the purpose of the custom pragma
+`fsMultiSync` used in the examples above? It is a simple macro generating an
+additional `async` copy of our stream processing functions where all the input
+types are replaced by their async counterparts (e.g. `AsyncInputStream`) and
+the return type is wrapped in a `Future` as usual.
+
+The standard API of `InputStream` and `AsyncInputStream` is exactly the same.
+Operations such as `readable` will just invoke `await` behind the scenes, but
+there is one key difference - the `await` will be triggered only when there
+is not enough data already stored in the stream buffers. Thus, in the great
+majority of cases, we avoid the high cost of instantiating a `Future` and
+yielding control to the event loop.
+
+We highly recommend implementing most of your stream processing code through
+the `fsMultiSync` pragma. This ensures the best possible performance and makes
+the code more easily testable (e.g. with inputs stored on disk). FastStreams
+ships with a set of fuzzing tools that will help you ensure that your code
+behaves correctly with arbitrary data and/or arbitrary interruption points.
+
+Nevertheless, if you need a more traditional async API, please be aware that
+all of the functions discussed in this README also have an `*Async` suffix
+form that returns a `Future` (e.g. `readableAsync`, `readAsync`, etc).
+
+One exception to the above rule is the helper `stream.timeoutToNextByte(t)`
+which can be used to detect situations where your communicating party is
+failing to send data in time. It accepts a `Duration` or an existing deadline
+`Future` and it's usually used like this:
+
+```nim
+proc performHandshake(c: Connection): bool {.async.} =
+  if c.inputStream.timeoutToNextByte(HANDSHAKE_TIMEOUT):
+    # The other party didn't send us anything in time,
+    # We close the connection:
+    close c
+    return false
+
+  while c.inputStream.readable:
+    ...
+```
+
+It is assumed that in traditional async code, timeouts will be managed more
+explicitly with `sleepAsync` and the `or` operator defined over futures.
+
+### `OutputStream` and `AsyncOutputStream`
 
 An `OutputStream` manages a particular output device. The library offers out
 of the box the following output stream types:
@@ -277,6 +329,10 @@ of the box the following output stream types:
   For writing to an arbitrary existing buffer. <br />
   You are responsible for ensuring that the backing buffer won't be invalidated
   while the stream is being used.
+
+* `pipeOutput` (async)
+
+  For arbitrary conmmunication between a produced and a consumer.
 
 * `chronosOutput` (async)
 
@@ -358,8 +414,18 @@ single page of `pageSize` bytes (specified at stream creation). Calls to
 `write` will just populate this page until it becomes full and only then
 it would be sent to the output device.
 
-Writes larger than a page will be sent to the output device immediately,
-so setting the `pageSize` to zero enables unbuffered mode of operation.
+As the example demonstrates, a `memoryOutput` will continue buffering
+pages until they can be finally concatenated and returned in `stream.getOutput`.
+If the output fits within a single page, it will be efficiently moved to
+the `getOutput` result. When the output size is known upfront you can ensure
+that this optimization is used by calling `stream.ensureRunway` before any
+writes, but please note that the library is free to ignore this hint in async
+context or if a maximum memory usage policy is specified.
+
+In a non-memory stream, any writes larger than a page or issued through the
+`writeNow` API will be sent to the output device immediately.
+
+#### Delayed Writes
 
 Please note that even in async context, `write` will complete immediately.
 To handle back-pressure properly, use `stream.flush` or `stream.waitForConsumer`
@@ -368,19 +434,23 @@ bytes before continuing. The rationale here is that introducing an interruption
 point at every `write` produces less optimal code, but if this is desired you
 can use the `stream.writeAndWait` API.
 
-Fixed-size and variable-size length prefixes can be handled without
-additional memory allocations through the `stream.delayFixedSizeWrite`
-and `stream.delayVarSizeWrite` APIs which return a `WriteCursor` object
-that must be `finalized` after the length-prefix is written. You can do
-this in one step with `cursor.finalWrite`.
+Many protocols and formats employ fixed-size and variable-size length prefixes
+that have been tradionally difficult to handle because they require you to
+either measure the size of the content before writing it to the stream, or
+even worse, serialize it to a memory buffer in order to determine its size.
 
-As the example demonstrates, a `memoryOutput` will continue buffering
-pages until they can be finally concatenated and returned in `stream.getOutput`.
-If the output fits within a single page, it will be efficiently moved to
-the `getOutput` result. When the output size is known upfront you can ensure
-that this optimization is used by calling `stream.ensureRunway` before any
-writes, but please note that the library is free to ignore this hint in async
-context if a maximum memory usage policy is specified.
+FastStreams supports handling such length prefixes with a zero-copy mechanism
+that doesn't require additional memory allocations. `stream.delayFixedSizeWrite`
+and `stream.delayVarSizeWrite` are APIs that return a `WriteCursor` object that
+can be used to implement a delayed write to the stream. After obtaining the
+write cursor you can take a note of the current `pos` in the stream and then
+continue issuing `stream.write` operations normally. After all of the content
+is written, you obtain `pos` again to determine the final value of the length
+prefix. Throughout the whole time, you are free to call `write` on the cursor
+to populate the "hole" left in the stream with bytes, but at the end you must
+call `finalize` to unlock the stream for flushing. You can also perform the
+finalization in one step with `finalWrite` (the one-step approach is manatory
+for variable-size prefixes).
 
 ### `Pipeline`
 
@@ -388,7 +458,7 @@ context if a maximum memory usage policy is specified.
 
 A `Pipeline` represents a chain of transformations that should be applied to a
 stream. It starts with an `InputStream` followed by one or more transformation
-steps and ending in a `OutputStream`.
+steps and ending with a result.
 
 Each transformation step is a function of the kind:
 
@@ -396,6 +466,15 @@ Each transformation step is a function of the kind:
 type PipelineStep* = proc (i: InputStream, o: OutputStream)
                           {.gcsafe, raises: [Defect, CatchableError].}
 ```
+
+A result obtaining operation is a function of the kind:
+
+```nim
+type PipelineResultProc*[T] = proc (i: InputStream): T
+                                   {.gcsafe, raises: [Defect, CatchableError].}
+```
+
+Please note that `stream.getOutput` is an example of such a function.
 
 Pipelnes can be created with the `cretePipeline` API or executed in place with
 `executePipeline`. If the first input source is async, then the whole pipeline

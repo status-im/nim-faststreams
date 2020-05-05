@@ -216,7 +216,7 @@ template readableNow*(s: AsyncInputStream): bool =
   readableNow InputStream(s)
 
 func flipPage(s: InputStream) =
-  doAssert s.buffers.len > 1
+  fsAssert s.buffers != nil and s.buffers.len > 1
   discard s.buffers.popFirst
   s.span = obtainReadableSpan s.buffers[0]
   s.spanEndPos += s.span.len
@@ -348,7 +348,7 @@ func memoryInput*(data: openarray[char]): InputStreamHandle =
 
 proc resetBuffers*(s: InputStream, buffers: PageBuffers) =
   # This should be used only on safe memory input streams
-  doAssert s.vtable == nil and s.buffers != nil and buffers.len > 0
+  fsAssert s.vtable == nil and s.buffers != nil and buffers.len > 0
   s.buffers = buffers
   s.span = obtainReadableSpan buffers.queue[0]
   s.spanEndPos = s.span.len
@@ -530,17 +530,43 @@ template readable*(sp: AsyncInputStream, np: int): bool =
 
   readableNImpl(s, n, fsAwait, readAsync)
 
-proc peek*(s: InputStream): byte {.inline.} =
-  doAssert hasRunway(s.span)
-  return s.span.startAddr[]
+when false:
+  func flipPagePeek(s: InputStream): byte =
+    flipPage s
+    result = s.span.startAddr[]
+
+func flipPageRead(s: InputStream): byte =
+  flipPage s
+  result = s.span.startAddr[]
+  bumpPointer s.span
+
+template peek*(sp: InputStream): byte =
+  let s = sp
+  if hasRunway(s.span):
+    s.span.startAddr[]
+  else:
+    flipPage s
+    s.span.startAddr[]
 
 template peek*(s: AsyncInputStream): byte =
   peek InputStream(s)
 
+template read*(sp: InputStream): byte =
+  let s = sp
+  if hasRunway(s.span):
+    let res = s.span.startAddr[]
+    bumpPointer(s.span)
+    res
+  else:
+    flipPageRead s
+
+template read*(s: AsyncInputStream): byte =
+  read InputStream(s)
+
 proc peekAt*(s: InputStream, pos: int): byte {.inline.} =
   # TODO implement page flipping
   let peekHead = offset(s.span.startAddr, pos)
-  doAssert cast[uint](peekHead) < cast[uint](s.span.endAddr)
+  fsAssert cast[uint](peekHead) < cast[uint](s.span.endAddr)
   return peekHead[]
 
 template peekAt*(s: AsyncInputStream, pos: int): byte =
@@ -549,18 +575,11 @@ template peekAt*(s: AsyncInputStream, pos: int): byte =
 proc advance*(s: InputStream) =
   if hasRunway(s.span):
     bumpPointer s.span
-  elif s.buffers != nil and s.buffers.len > 1:
+  else:
     flipPage s
 
 template advance*(s: AsyncInputStream) =
   advance InputStream(s)
-
-proc read*(s: InputStream): byte =
-  result = s.peek()
-  advance s
-
-template read*(s: AsyncInputStream): byte =
-  read InputStream(s)
 
 proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natural =
   var
@@ -691,7 +710,7 @@ template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
 
 proc readOnce*(sp: AsyncInputStream): Future[Natural] =
   let s = InputStream(sp)
-  doAssert s.buffers != nil and s.vtable != nil
+  fsAssert s.buffers != nil and s.vtable != nil
   s.vtable.readAsync(s, nil, 0)
 
 when defined(windows):
@@ -724,7 +743,8 @@ template readNImpl(sp: InputStream,
 
   if n > runway:
     startAddr = allocMem(tmpSeq, n, np)
-    doAssert drainBuffersInto(s, startAddr, n) == n
+    let drained {.used.} = drainBuffersInto(s, startAddr, n)
+    fsAssert drained == n
   else:
     startAddr = s.span.startAddr
     bumpPointer s.span, n
@@ -775,16 +795,16 @@ when false:
   # Obsolete APIs for removal
   proc bufferPos(s: InputStream, pos: int): ptr byte =
     let offsetFromEnd = pos - s.spanEndPos
-    doAssert offsetFromEnd < 0
+    fsAssert offsetFromEnd < 0
     result = offset(s.span.endAddr, offsetFromEnd)
-    doAssert result >= s.bufferStart
+    fsAssert result >= s.bufferStart
 
   proc `[]`*(s: InputStream, pos: int): byte {.inline.} =
     s.bufferPos(pos)[]
 
   proc rewind*(s: InputStream, delta: int) =
     s.head = offset(s.head, -delta)
-    doAssert s.head >= s.bufferStart
+    fsAssert s.head >= s.bufferStart
 
   proc rewindTo*(s: InputStream, pos: int) {.inline.} =
     s.head = s.bufferPos(pos)
