@@ -12,7 +12,7 @@ type
     buffers*: PageBuffers          # This is nil for unsafe memory inputs
     span*: PageSpan
     spanEndPos*: Natural
-    closeFut: Future[void]         # This is nil before `close` is called
+    closeFut*: Future[void]        # This is nil before `close` is called
     when debugHelpers:
       name*: string
 

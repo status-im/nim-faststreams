@@ -305,20 +305,29 @@ macro executePipeline*(start: AsyncInputStream, steps: varargs[untyped]): untype
     stepInput = stepOutput
 
   var RetTypeExpr = copy steps[^1]
-  RetTypeExpr.insert(1, newCall("default", ident"AsyncOutputStream"))
+  RetTypeExpr.insert(1, newCall("default", ident"AsyncInputStream"))
 
   var closingCall = steps[^1]
-  closingCall.insert(1, newDotExpr(stepInput, ident"output"))
+  closingCall.insert(1, newCall(bindSym"initReader", stepInput))
 
   pipelineBody.add quote do:
     await allFutures(`pipelineSteps`)
-    return `closingCall`
+    `closingCall`
 
   result = quote do:
-    type RetType = type(`RetTypeExpr`)
+    type UserOpRetType = type(`RetTypeExpr`)
+
+    when UserOpRetType is Future:
+      type RetType = type(default(UserOpRetType).read)
+    else:
+      type RetType = UserOpRetType
 
     proc pipelineProc(`stream`: AsyncInputStream): Future[RetType] {.async.} =
-      `pipelineBody`
+      when UserOpRetType is Future:
+        var f = `pipelineBody`
+        return await(f)
+      else:
+        return `pipelineBody`
 
     pipelineProc(`start`)
 
