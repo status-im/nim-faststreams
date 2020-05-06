@@ -20,6 +20,10 @@ proc countLines(s: InputStream): Natural =
   for s in lines(s):
     inc result
 
+proc readAll(s: InputStream): seq[byte] =
+  while s.readable:
+    result.add s.read
+
 const
   asciiTableFile = "files" / "ascii_table.txt"
   asciiTableContents = slurp(asciiTableFile)
@@ -131,6 +135,13 @@ procSuite "input stream":
     expect CatchableError: discard memFileInput(fileName)
 
     check not fileExists(fileName)
+
+  test "non-blocking reads":
+    let s = fileInput(asciiTableFile, pageSize = 20)
+    if s.readable:
+      s.nonBlockingReads:
+        check s.readAll.len == 20
+      check s.readable
 
   test "simple":
     var input = repeat("1234 5678 90AB CDEF\n", 1000)

@@ -274,6 +274,22 @@ func getBestContiguousRunway(s: InputStream): Natural =
       flipPage s
       result = s.span.len
 
+template nonBlockingReads*(sp: InputStream|AsyncInputStream, newName, blk: untyped) =
+  let s = InputStream sp
+  const sname = astToStr(sp)
+
+  let vtable = s.vtable
+  s.vtable = nil
+
+  try:
+    let `newName` {.inject.} = s
+    blk
+  finally:
+    s.vtable = vtable
+
+template nonBlockingReads*(sp: InputStream|AsyncInputStream, blk: untyped) =
+  nonBlockingReads(sp, astToStr(sp), blk)
+
 func totalUnconsumedBytes*(s: InputStream): Natural =
   ## Returns the number of bytes that are currently sitting within the stream
   ## buffers and that can be consumed with `read` or `advance`.
