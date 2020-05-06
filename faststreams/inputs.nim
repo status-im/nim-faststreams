@@ -110,9 +110,6 @@ template close*(sp: AsyncInputStream) =
   if s.closeFut != nil:
     await s.closeFut
 
-proc closeAsync*(s: AsyncInputStream) {.async.} =
-  close s
-
 template closeNoWait*(sp: AsyncInputStream|InputStream) =
   ## Close the stream without waiting even if's async.
   ## This operation will use `asyncCheck` internally to detect unhandled
@@ -214,6 +211,55 @@ proc readableNow*(s: InputStream): bool =
 
 template readableNow*(s: AsyncInputStream): bool =
   readableNow InputStream(s)
+
+# TODO: The pure async interface should be moved in a separate module
+#       to make FastStreams more light-weight when the async back-end
+#       is not used (e.g. in Confutils)
+#
+#       The problem is that the `async` macro will pull the entire
+#       event loop right now.
+
+proc readOnce*(sp: AsyncInputStream): Future[Natural] {.async.} =
+  let s = InputStream(sp)
+  fsAssert s.buffers != nil and s.vtable != nil
+
+  result = await s.vtable.readAsync(s, nil, 0)
+
+  if s.buffers.eofReached:
+    disconnectInputDevice(s)
+
+  if result > 0 and s.span.len == 0:
+    s.buffers.nextReadableSpan(s.span)
+    s.spanEndPos += s.span.len
+
+proc timeoutToNextByteImpl(s: AsyncInputStream,
+                           deadline: Future): Future[bool] {.async.} =
+  let readFut = s.readOnce
+  await readFut or deadline
+  if not readFut.finished:
+    readFut.cancel()
+    return true
+  else:
+    return false
+
+template timeoutToNextByte*(sp: AsyncInputStream, deadline: Future): bool =
+  let s = sp
+  if readableNow(s):
+    true
+  else:
+    await timeoutToNextByteImpl(s, deadline)
+
+template timeoutToNextByte*(sp: AsyncInputStream, timeout: Duration): bool =
+  let s = sp
+  if readableNow(s):
+    true
+  else:
+    await timeoutToNextByteImpl(s, sleepAsync(timeout))
+
+proc closeAsync*(s: AsyncInputStream) {.async.} =
+  close s
+
+# TODO: End of purely async interface
 
 func flipPage(s: InputStream) =
   fsAssert s.buffers != nil and s.buffers.len > 1
@@ -715,11 +761,6 @@ template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
   # double evaluation of the `dst` expression:
   let (dstAddr, dstLen) = openArrayToPair(dst)
   readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync) == dstLen
-
-proc readOnce*(sp: AsyncInputStream): Future[Natural] =
-  let s = InputStream(sp)
-  fsAssert s.buffers != nil and s.vtable != nil
-  s.vtable.readAsync(s, nil, 0)
 
 when defined(windows):
   proc alloca(n: int): ptr byte {.importc, header: "<malloc.h>".}

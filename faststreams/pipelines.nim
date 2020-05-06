@@ -6,7 +6,7 @@ export
   inputs, outputs, async_backend
 
 type
-  FsAsyncPipe* = ref object
+  Pipe* = ref object
     # TODO: Make these stream handles
     input*: AsyncInputStream
     output*: AsyncOutputStream
@@ -218,16 +218,15 @@ proc pipeOutput*(buffers: PageBuffers,
     destination: destination)
 
 func asyncPipe*(pageSize = defaultPageSize,
-                maxBufferedBytes = defaultPageSize * 4): FsAsyncPipe =
+                maxBufferedBytes = defaultPageSize * 4): Pipe =
   fsAssert pageSize > 0
-  FsAsyncPipe(buffers: initPageBuffers(pageSize, maxBufferedBytes))
+  Pipe(buffers: initPageBuffers(pageSize, maxBufferedBytes))
 
-func initReader*(pipe: FsAsyncPipe): AsyncInputStream =
+func initReader*(pipe: Pipe): AsyncInputStream =
   result = pipeInput(pipe.buffers)
   pipe.input = result
 
-func initWriter*(pipe: FsAsyncPipe): AsyncOutputStream =
-
+func initWriter*(pipe: Pipe): AsyncOutputStream =
   result = pipeOutput(pipe.buffers)
   pipe.output = result
 
