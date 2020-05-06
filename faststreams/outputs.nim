@@ -331,15 +331,31 @@ proc createCursor(s: OutputStream, size: int): WriteCursor =
   # of the newly created cursor:
   s.span.startAddr = endAddr
 
-proc delayFixedSizeWrite*(s: OutputStream, size: Natural): WriteCursor =
+proc delayFixedSizeWrite*(s: OutputStream, cursorSize: Natural): WriteCursor =
   let runway = s.span.len
-  if size <= runway:
-    result = createCursor(s, size)
+  if cursorSize <= runway:
+    result = createCursor(s, cursorSize)
+  elif runway == 0:
+    # This is a special case of requesting a cursor right at the page boundary.
+    # We can safely create a non-split cursor on a new page:
+    let
+      nextPageSize = nextAlignedSize(cursorSize, s.buffers.pageSize)
+      nextPage = s.buffers.addWritablePage(nextPageSize)
+      nextPageSpan = nextPage.fullSpan
+      cursorEndAddr = offset(nextPageSpan.startAddr, cursorSize)
+
+    inc s.extCursorsCount
+    result = WriteCursor(stream: s,
+                         span: PageSpan(startAddr: nextPageSpan.startAddr,
+                                        endAddr: cursorEndAddr))
+
+    s.span = PageSpan(startAddr: cursorEndAddr, endAddr: nextPageSpan.endAddr)
+    s.spanEndPos += nextPageSize
   else:
     result = createCursor(s, runway)
 
     let
-      runwayDeficit = size - runway
+      runwayDeficit = cursorSize - runway
       nextPageSize = nextAlignedSize(runwayDeficit, s.buffers.pageSize)
       nextPage = s.buffers.addWritablePage(nextPageSize)
       nextPageSpan = nextPage.fullSpan
@@ -591,7 +607,6 @@ template memCopyToBytes(value: auto): untyped =
   makeOpenArray(cast[ptr byte](valueAddr), sizeof(T))
 
 proc writeMemCopy*(s: OutputStream, value: auto) =
-  bind write
   write s, memCopyToBytes(value)
 
 proc writeBytesAsyncImpl(sp: OutputStream,
@@ -664,7 +679,6 @@ proc write*(c: var WriteCursor, chars: openarray[char]) {.inline.} =
   writeBytesToCursor(c, makeOpenArray(cast[ptr byte](charsStart), chars.len))
 
 proc writeMemCopy*[T](c: var WriteCursor, value: T) =
-  bind writeBytesToCursor
   writeBytesToCursor(c, memCopyToBytes(value))
 
 proc write*(c: var WriteCursor, str: string) =
