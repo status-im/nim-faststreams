@@ -317,13 +317,13 @@ proc performHandshake(c: Connection): bool {.async.} =
 It is assumed that in traditional async code, timeouts will be managed more
 explicitly with `sleepAsync` and the `or` operator defined over futures.
 
-#### Non-blocking reads
+#### Range-restricted reads
 
 Protocols transmitting serialized payloads often provide information regarding
 the size of the payload. When you invoke the deserialization routine, it's
 preferable if the provided boundaries are treated like an "end of file" marker
 for the deserializer. FastStreams provides an easy way to achieve this without
-extra copies and memory allocations through the `nonBlockingReads` facility.
+extra copies and memory allocations through the `withReadableRange` facility.
 Here is a typical usage:
 
 ```nim
@@ -333,18 +333,20 @@ proc decodeFrame(s: AsyncInputStream, DecodedType: type): Option[DecodedType] =
 
   let lengthPrefix = toInt32 s.read(4)
   if s.readable(lengthPrefix):
-    s.nonBlockingReads(lengthPrefix):
-      s.readValue(Json, DecodedType)
+    s.withReadableRange(lengthPrefix, range):
+      range.readValue(Json, DecodedType)
 ```
 
 Please note that the above example uses the [nim-serialization library](https://github.com/status-im/nim-serialization/)
 
-Simply, inside the `nonBlockingReads` block, `s.readable` will return `false`
-as soon as the Json parser has consumed the specified number of bytes.
-Furthermore, it's guaranteed that no blocking operations are possible and
-thus our `AsyncInputStream` will be treated like a normal `InputStream`.
-Depending on the complexity of the stream processors, this will often lead
-to much more optimal code.
+Simply, inside the `withReadableRange` block, `range` becomes a stream for
+which `s.readable` will return `false` as soon as the Json parser has consumed
+the specified number of bytes.
+
+Furthermore, `withReadableRange` guarantees that all stream operations within
+the block will be non-blocking, so it will transform the `AsyncInputStream`
+into a regular `InputStream`. Depending on the complexity of the stream
+processing functions, this will often lead to significant performance gains.
 
 ### `OutputStream` and `AsyncOutputStream`
 

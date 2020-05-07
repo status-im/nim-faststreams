@@ -139,8 +139,8 @@ procSuite "input stream":
   test "non-blocking reads":
     let s = fileInput(asciiTableFile, pageSize = 20)
     if s.readable:
-      s.nonBlockingReads:
-        check s.readAll.len == 20
+      s.withReadableRange(20, r):
+        check r.readAll.len == 20
       check s.readable
 
   test "simple":
