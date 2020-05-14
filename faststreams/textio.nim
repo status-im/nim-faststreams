@@ -91,6 +91,31 @@ proc writeText*(s: OutputStream, x: CompiledIntTypes) =
   else:
     writeText(s, MatchingUInt(x))
 
+when defined(aa):
+  proc writeText*(s: OutputStream, x: float64|float) =  # this version mostly works, but does not account for rounding error
+    var whole = x.int
+    writeText(s, whole)
+    var frac = abs(x - whole.float)
+    if frac == 0.0:
+      return
+    write s, '.'
+    var limit: byte = 8
+    while (frac != 0.0) and (limit > 0):
+      limit -= 1
+      frac *=  10.0
+      whole = frac.int
+      frac -= whole.float
+      write s, char(ord('0') + whole)
+
+when defined(bb):
+  proc writeText*(s: OutputStream, x: float64|float) =   # this version just prints the integer part
+    writeText(s, x.int)
+
+when defined(cc):
+  proc writeText*(s: OutputStream, x: float64|float) =   # this version uses ftoa of stdlibc
+    proc floatToStr(x: float): string {.magic: "FloatToStr", noSideEffect.}
+    writeText(s, floatToStr(x))
+
 template writeText*(s: OutputStream, str: string) =
   write s, str
 
