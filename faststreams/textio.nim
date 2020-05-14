@@ -99,15 +99,13 @@ when defined(c):
     ## than `$` because it is directly written to the stream without
     ## allocating a standard Nim 'string'.
     ##
-    ## Because this procedure uses stdlib, it is only active when nim compiles
-    ## with the 'c' flag. Otherwise, float types fall back to the generic writeText
+    ## Because this procedure uses stdlib, it is only active when Nim compiles
+    ## with the 'c' flag. Otherwise, float types are passed to the generic writeText
     ## procedure.
     var buffer: array[65, char]
     discard writeFloatToBuffer(buffer, x)
-    for index in 0 ..< 65:
-      if buffer[index] == '\0':
-        break
-      write s, buffer[index]
+    let bs: cstring = addr buffer
+    write s, bs.toOpenArray(0, bs.len - 1)
 
 template writeText*(s: OutputStream, str: string) =
   write s, str

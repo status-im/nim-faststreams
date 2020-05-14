@@ -236,3 +236,15 @@ suite "output stream":
     let resultsAreEqual = nimSeq == memStream.getOutput
     check resultsAreEqual
 
+  test "float output":
+    let basic: float64 = 12345.125
+    let small: float32 = 12345.125
+    let large: float64 = 9.99e+20
+    let tiny: float64 = -2.25e-35
+
+    outputText basic
+    outputText small
+    outputText large
+    outputText tiny
+
+    checkOutputsMatch()
