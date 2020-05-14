@@ -1,6 +1,7 @@
 import
   stew/ptrops,
-  inputs, outputs, buffers, async_backend, multisync
+  inputs, outputs, buffers, async_backend, multisync,
+  math
 
 template matchingIntType(T: type int64): type = uint64
 template matchingIntType(T: type int32): type = uint32
@@ -115,6 +116,125 @@ when defined(cc):
   proc writeText*(s: OutputStream, x: float64|float) =   # this version uses ftoa of stdlibc
     proc floatToStr(x: float): string {.magic: "FloatToStr", noSideEffect.}
     writeText(s, floatToStr(x))
+
+when defined(dd):
+  proc writeText*(s: OutputStream, x: float64|float) =   # this version uses ftoa of stdlibc
+    write s, $x
+
+when defined(ee):
+  proc writeText*(s: OutputStream, x: float64|float) =  # this version mostly works, but does not account for rounding error
+    if x == 0.0:
+      write s, "0.0"
+      return
+    if x < 0.0:
+      write s, '-'
+    var frac = x.abs
+    var place = log10(frac).int
+    if place < 0:
+      place = 0
+    frac /= pow(10.0, place.float)
+    var whole: int
+    while (frac != 0.0) and (place > -100):
+      if place == -1:
+        write s, '.'
+      whole = frac.int
+      write s, char(ord('0') + whole)
+      frac = (frac - whole.float) * 10.0
+      place -= 1
+
+when defined(ff):
+  proc writeText*(s: OutputStream, x: float64|float) =  # handles rounding
+    const PRECISION_LIMIT = 16
+    const DECIMAL_POINT: uint8 = 255
+    if x == 0.0:
+      write s, "0.0"
+      return
+    var digits: array[322, byte]
+    var index: int = 0
+    if x < 0.0:
+      write s, '-'
+    var precision: int = 0
+    var firstDigitFound = false
+    var decimalPointIndex = -1
+    var frac = x.abs
+    var place = log10(frac).int
+    if place < 0:
+      place = 0
+    frac /= pow(10.0, place.float)
+    var whole: uint8
+    #
+    # run through the digits:
+    #
+    while (frac != 0.0) and (place > -317) and (precision < PRECISION_LIMIT):
+      if place == -1:
+        digits[index] = DECIMAL_POINT
+        decimalPointIndex = index
+        index += 1
+      whole = frac.uint8
+      digits[index] = whole
+      index += 1
+      if firstDigitFound:
+        precision += 1
+      else:
+        if whole != 0.uint8:
+          firstDigitFound = true
+          precision += 1
+      frac = (frac - whole.float) * 10.0
+      place -= 1
+    #
+    # place any missing decimal points as a key marker
+    #
+    if decimalPointIndex == -1:
+      # if decimal point not expressed yet, then add it
+      index += place + 1
+      digits[index] = DECIMAL_POINT
+      decimalPointIndex = index
+      index += 1
+    index -= 1
+    #
+    # remove trailing digits and adjust precision back if need be:
+    #
+    while (digits[index] == 0) and (index > 0):
+      precision -= 1
+      index -= 1
+    #
+    # if still at precision limit, then do rounding:
+    #
+    if precision >= PRECISION_LIMIT:
+      while index > 0:
+        if digits[index] == DECIMAL_POINT:
+          index -= 1
+          continue
+        elif digits[index] >= 5:
+          digits[index - 1] += 1
+          digits[index] = 0
+          if digits[index - 1] < 10:
+            break
+        else:
+          digits[index] = 0
+          break
+        index -= 1
+    #
+    # remove trailing digits and adjust precision back if need be:
+    #
+    while (digits[index] == 0) and (index > 0):
+      precision -= 1
+      index -= 1
+    #
+    # express to the stream
+    #
+    if index < decimalPointIndex:
+      index = decimalPointIndex
+    for i in 0 .. index:
+      let d = digits[i]
+      if d == DECIMAL_POINT:
+        write s, '.'
+      elif d == 10:
+        write s, "10"
+      else:
+        write s, char(ord('0') + d)
+    if digits[index] == DECIMAL_POINT:
+      write s, '0'
 
 template writeText*(s: OutputStream, str: string) =
   write s, str
