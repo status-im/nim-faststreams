@@ -103,9 +103,8 @@ when defined(c):
     ## with the 'c' flag. Otherwise, float types are passed to the generic writeText
     ## procedure.
     var buffer: array[65, char]
-    discard writeFloatToBuffer(buffer, x)
-    let bs: cstring = addr buffer
-    write s, bs.toOpenArray(0, bs.len - 1)
+    let blen = writeFloatToBuffer(buffer, x)
+    write s, buffer.toOpenArray(0, blen - 1)
 
 template writeText*(s: OutputStream, str: string) =
   write s, str
