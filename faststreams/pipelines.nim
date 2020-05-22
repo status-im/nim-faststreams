@@ -172,8 +172,9 @@ func pipeInput*(source: InputStream,
 func pipeInput*(buffers: PageBuffers,
                 allowWaitFor = false,
                 source: InputStream = nil): AsyncInputStream =
+  var spanEndPos = Natural 0
   var span = if buffers.len == 0: default(PageSpan)
-             else: obtainReadableSpan buffers.queue[0]
+             else: buffers.obtainReadableSpan(spanEndPos)
 
   AsyncInputStream LayeredInputStream(
     vtable: vtableAddr pipeInputVTable,

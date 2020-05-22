@@ -53,10 +53,10 @@ procSuite "input stream":
     var input = unsafeMemoryInput(str)
 
   emptyInputTests "fileInput":
-    var input = memFileInput("files" / "empty_file")
+    var input = fileInput("files" / "empty_file")
 
   emptyInputTests "memFileInput":
-    var input = fileInput("files" / "empty_file")
+    var input = memFileInput("files" / "empty_file")
 
   template asciiTableFileTest(name: string, body: untyped) =
     test name & " of ascii table with regular pageSize":
@@ -137,11 +137,18 @@ procSuite "input stream":
     check not fileExists(fileName)
 
   test "non-blocking reads":
-    let s = fileInput(asciiTableFile, pageSize = 20)
-    if s.readable:
+    let s = fileInput(asciiTableFile, pageSize = 100)
+    if s.readable(20):
       s.withReadableRange(20, r):
         check r.readAll.len == 20
-      check s.readable
+
+    check s.readable
+
+    if s.readable(200):
+      s.withReadableRange(200, r):
+        check r.readAll.len == 200
+
+    check s.readable
 
   test "simple":
     var input = repeat("1234 5678 90AB CDEF\n", 1000)

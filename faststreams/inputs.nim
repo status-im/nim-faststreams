@@ -206,8 +206,19 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
       endAddr: offset(head, mappedSize)),
     file: memFile)
 
+func getNewSpan(s: InputStream) =
+  let buffers = s.buffers
+  fsAssert buffers != nil
+  s.span = buffers.obtainReadableSpan(s.spanEndPos)
+
+func getNewSpanOrDieTrying(s: InputStream) =
+  getNewSpan s
+  fsAssert s.span.hasRunway
+
 proc readableNow*(s: InputStream): bool =
-  (not s.span.atEnd) or (s.buffers != nil and s.buffers.len > 1)
+  if s.span.hasRunway: return true
+  getNewSpan s
+  s.span.hasRunway
 
 template readableNow*(s: AsyncInputStream): bool =
   readableNow InputStream(s)
@@ -229,8 +240,7 @@ proc readOnce*(sp: AsyncInputStream): Future[Natural] {.async.} =
     disconnectInputDevice(s)
 
   if result > 0 and s.span.len == 0:
-    s.buffers.nextReadableSpan(s.span)
-    s.spanEndPos += s.span.len
+    getNewSpan s
 
 proc timeoutToNextByteImpl(s: AsyncInputStream,
                            deadline: Future): Future[bool] {.async.} =
@@ -261,32 +271,11 @@ proc closeAsync*(s: AsyncInputStream) {.async.} =
 
 # TODO: End of purely async interface
 
-func flipPage(s: InputStream) =
-  fsAssert s.buffers != nil and s.buffers.len > 1
-  discard s.buffers.popFirst
-  s.span = obtainReadableSpan s.buffers[0]
-  s.spanEndPos += s.span.len
-
 func getBestContiguousRunway(s: InputStream): Natural =
   result = s.span.len
-  if result == 0:
-    if s.buffers != nil and s.buffers.len > 1:
-      flipPage s
-      result = s.span.len
-
-template withReadableRange*(sp: InputStream|AsyncInputStream,
-                            rangeLen: Natural,
-                            rangeStreamVarName, blk: untyped) =
-  let s = InputStream sp
-
-  let vtable = s.vtable
-  s.vtable = nil
-
-  try:
-    let `rangeStreamVarName` {.inject.} = s
-    blk
-  finally:
-    s.vtable = vtable
+  if result == 0 and s.buffers != nil:
+    getNewSpan s
+    result = s.span.len
 
 func totalUnconsumedBytes*(s: InputStream): Natural =
   ## Returns the number of bytes that are currently sitting within the stream
@@ -297,13 +286,45 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
                       else: s.buffers.totalBufferedBytes
 
   if localRunway == 0 and runwayInBuffers > 0:
-    flipPage s
+    getNewSpan s
 
   localRunway + runwayInBuffers
 
 template totalUnconsumedBytes*(s: AsyncInputStream): Natural =
   ## Alias for InputStream.totalUnconsumedBytes
   totalUnconsumedBytes InputStream(s)
+
+proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
+  fsAssert rangeLen > 0
+  s.vtable = nil
+
+  let runway = s.span.len
+  if rangeLen > runway:
+    return s.buffers.setFauxEof(rangeLen - runway + s.spanEndPos)
+  else:
+    s.span.endAddr = offset(s.span.startAddr, rangeLen)
+    let bytesToUnconsume = runway - rangeLen
+    s.spanEndPos -= bytesToUnconsume
+    if s.buffers != nil:
+      s.buffers.queue.peekFirst.consumedTo -= bytesToUnconsume
+    return s.buffers.setFauxEof(s.spanEndPos)
+
+template withReadableRange*(sp: InputStream|AsyncInputStream,
+                            rangeLen: Natural,
+                            rangeStreamVarName, blk: untyped) =
+  let
+    s = InputStream sp
+    vtable = s.vtable
+    origEndAddr = s.span.endAddr
+    origEof = limitReadableRange(s, rangeLen)
+
+  try:
+    let rangeStreamVarName {.inject.} = s
+    blk
+  finally:
+    s.vtable = vtable
+    s.span.endAddr = origEndAddr
+    restoreEof(s.buffers, origEof)
 
 let fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
@@ -384,24 +405,30 @@ template len*(s: AsyncInputStream): Option[Natural] =
   len InputStream(s)
 
 func memoryInput*(buffers: PageBuffers): InputStreamHandle =
+  var spanEndPos = Natural 0
   var span = if buffers.len == 0: default(PageSpan)
-             else: obtainReadableSpan buffers.queue[0]
+             else: buffers.obtainReadableSpan(spanEndPos)
 
   makeHandle InputStream(buffers: buffers,
                          span: span,
-                         spanEndPos: span.len)
+                         spanEndPos: spanEndPos)
 
 func memoryInput*(data: openarray[byte]): InputStreamHandle =
-  let
-    buffers = initPageBuffers(data.len)
-    page = buffers.addWritablePage(data.len)
-    pageSpan = page.fullSpan
+  let stream = if data.len > 0:
+    let
+      buffers = initPageBuffers(data.len)
+      page = buffers.addWritablePage(data.len)
+      pageSpan = page.fullSpan
 
-  copyMem(pageSpan.startAddr, unsafeAddr data[0], data.len)
+    copyMem(pageSpan.startAddr, unsafeAddr data[0], data.len)
 
-  makeHandle InputStream(buffers: buffers,
-                         span: pageSpan,
-                         spanEndPos: data.len)
+    InputStream(buffers: buffers,
+                span: pageSpan,
+                spanEndPos: data.len)
+  else:
+    InputStream()
+
+  makeHandle stream
 
 func memoryInput*(data: openarray[char]): InputStreamHandle =
   memoryInput charsToBytes(data)
@@ -409,9 +436,9 @@ func memoryInput*(data: openarray[char]): InputStreamHandle =
 proc resetBuffers*(s: InputStream, buffers: PageBuffers) =
   # This should be used only on safe memory input streams
   fsAssert s.vtable == nil and s.buffers != nil and buffers.len > 0
+  s.spanEndPos = 0
   s.buffers = buffers
-  s.span = obtainReadableSpan buffers.queue[0]
-  s.spanEndPos = s.span.len
+  getNewSpan s
 
 proc continueAfterRead(s: InputStream, bytesRead: Natural): bool =
   # Please note that this is extracted into a proc only to reduce the code
@@ -426,8 +453,7 @@ proc continueAfterRead(s: InputStream, bytesRead: Natural): bool =
     disconnectInputDevice(s)
 
   if bytesRead > 0:
-    s.buffers.nextReadableSpan(s.span)
-    s.spanEndPos += s.span.len
+    getNewSpan s
     return true
   else:
     return false
@@ -440,21 +466,23 @@ template bufferMoreDataImpl(s, awaiter, readOp: untyped): bool =
   # The vtable will be `nil` for a memory stream and `vtable.readOp`
   # will be `nil` for a memFile. If we've reached here, this is the
   # end of the memory buffer, so we can signal EOF:
-  if s.buffers == nil or s.vtable == nil or s.vtable.readOp == nil:
+  if s.buffers == nil:
     false
   else:
     # There might be additional pages in our buffer queue. If so, we
     # just jump to the next one:
-    if s.buffers.len > 1:
-      flipPage s
+    getNewSpan s
+    if hasRunway(s.span):
       true
-    else:
+    elif s.vtable != nil and s.vtable.readOp != nil:
       # We ask our input device to populate our page queue with newly
       # read pages. The state of the queue afterwards will tell us if
       # the read was successful. In `continueAfterRead`, we examine if
       # EOF was reached, but please note that some data might have been
       # read anyway:
       continueAfterRead(s, awaiter s.vtable.readOp(s, nil, 0))
+    else:
+      false
 
 proc bufferMoreDataSync(s: InputStream): bool =
   # This proc exists only to avoid inlining of the code of
@@ -518,8 +546,7 @@ template readable*(sp: AsyncInputStream): bool =
 func continueAfterReadN(s: InputStream,
                         runwayBeforeRead, bytesRead: Natural) =
   if runwayBeforeRead == 0 and bytesRead > 0:
-    s.buffers.nextReadableSpan(s.span)
-    s.spanEndPos += s.span.len
+    getNewSpan s
 
 template readableNImpl(s, n, awaiter, readOp: untyped): bool =
   let runway = totalUnconsumedBytes(s)
@@ -590,26 +617,21 @@ template readable*(sp: AsyncInputStream, np: int): bool =
 
   readableNImpl(s, n, fsAwait, readAsync)
 
-when false:
-  func flipPagePeek(s: InputStream): byte =
-    flipPage s
-    result = s.span.startAddr[]
-
-func flipPageRead(s: InputStream): byte =
-  flipPage s
-  result = s.span.startAddr[]
-  bumpPointer s.span
-
 template peek*(sp: InputStream): byte =
   let s = sp
   if hasRunway(s.span):
     s.span.startAddr[]
   else:
-    flipPage s
+    getNewSpanOrDieTrying s
     s.span.startAddr[]
 
 template peek*(s: AsyncInputStream): byte =
   peek InputStream(s)
+
+func readFromNewSpan(s: InputStream): byte =
+  getNewSpanOrDieTrying s
+  result = s.span.startAddr[]
+  bumpPointer s.span
 
 template read*(sp: InputStream): byte =
   let s = sp
@@ -618,7 +640,7 @@ template read*(sp: InputStream): byte =
     bumpPointer(s.span)
     res
   else:
-    flipPageRead s
+    readFromNewSpan s
 
 template read*(s: AsyncInputStream): byte =
   read InputStream(s)
@@ -636,7 +658,7 @@ proc advance*(s: InputStream) =
   if hasRunway(s.span):
     bumpPointer s.span
   else:
-    flipPage s
+    getNewSpan s
 
 proc advance*(s: InputStream, n: Natural) =
   # TODO This is silly, implement it properly
@@ -666,7 +688,7 @@ proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
 
   if s.buffers != nil:
     # Since we reached the end of the current page,
-    # we have to do the equivalent of `flipPage`:
+    # we have to do the equivalent of `getNewSpan`:
 
     # TODO: what if the page was extended?
     if s.buffers.len > 0:
@@ -717,21 +739,28 @@ proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
 template readIntoExImpl(s: InputStream,
                         dst: ptr byte, dstLen: Natural,
                         awaiter, readOp: untyped): Natural =
-  var bytesRead = drainBuffersInto(s, dst, dstLen)
+  let totalBytesDrained = drainBuffersInto(s, dst, dstLen)
+  var bytesDeficit = (dstLen - totalBytesDrained)
 
-  while bytesRead < dstLen:
-    let
-      bytesDeficit = dstLen - bytesRead
-      adjustedDst = offset(dst, bytesRead)
+  if bytesDeficit > 0:
+    var adjustedDst = offset(dst, totalBytesDrained)
 
-    bytesRead += awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
+    while true:
+      let newBytesRead = awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
 
-    if s.buffers.eofReached:
-      disconnectInputDevice(s)
-      break
+      s.spanEndPos += newBytesRead
+      bytesDeficit -= newBytesRead
 
-  s.spanEndPos += bytesRead
-  bytesRead
+      if s.buffers.eofReached:
+        disconnectInputDevice(s)
+        break
+
+      if bytesDeficit == 0:
+        break
+
+      adjustedDst = offset(dst, newBytesRead)
+
+  dstLen - bytesDeficit
 
 proc readIntoEx*(s: InputStream, dst: var openarray[byte]): int =
   ## Read data into the destination buffer.
@@ -853,22 +882,4 @@ proc pos*(s: InputStream): int {.inline.} =
 
 template pos*(s: AsyncInputStream): int =
   pos InputStream(s)
-
-when false:
-  # Obsolete APIs for removal
-  proc bufferPos(s: InputStream, pos: int): ptr byte =
-    let offsetFromEnd = pos - s.spanEndPos
-    fsAssert offsetFromEnd < 0
-    result = offset(s.span.endAddr, offsetFromEnd)
-    fsAssert result >= s.bufferStart
-
-  proc `[]`*(s: InputStream, pos: int): byte {.inline.} =
-    s.bufferPos(pos)[]
-
-  proc rewind*(s: InputStream, delta: int) =
-    s.head = offset(s.head, -delta)
-    fsAssert s.head >= s.bufferStart
-
-  proc rewindTo*(s: InputStream, pos: int) {.inline.} =
-    s.head = s.bufferPos(pos)
 

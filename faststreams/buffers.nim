@@ -13,6 +13,7 @@ type
   Page* = object
     consumedTo*: Natural
     writtenTo*: Natural
+    fauxEofAt*: Natural
     data*: ref string
 
   PageRef* = ref Page
@@ -26,6 +27,7 @@ type
     waitingWriter*: Future[void]
 
     eofReached*: bool
+    fauxEofPos*: Natural
 
 const
   nimPageSize* = 4096
@@ -35,6 +37,8 @@ const
     # that go through a fast O(0) path in the allocator.
   defaultPageSize* = 4096 - nimAllocatorMetadataSize
   maxStackUsage* = 16384
+
+  noEofChange* = high(Natural)
 
 when debugHelpers:
   proc describeBuffers*(context: static string, buffers: PageBuffers) =
@@ -78,11 +82,39 @@ template pageChars*(page: PageRef): untyped =
   let baseAddr = cast[ptr UncheckedArray[char]](allocationStart(page))
   toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
-func obtainReadableSpan*(page: PageRef, writable: static[bool] = false): PageSpan =
-  let baseAddr = page.allocationStart
-  result = PageSpan(startAddr: offset(baseAddr, page.consumedTo),
-                    endAddr: offset(baseAddr, page.writtenTo))
-  page.consumedTo = page.writtenTo
+func obtainReadableSpan*(buffers: PageBuffers,
+                         currentSpanEndPos: var Natural): PageSpan =
+  if buffers.queue.len == 0:
+    return default(PageSpan)
+
+  var page = buffers.queue[0]
+  var unconsumedLen = page.writtenTo - page.consumedTo
+  if unconsumedLen == 0:
+    if buffers.queue.len > 1:
+      discard buffers.queue.popFirst
+      page = buffers.queue[0]
+      unconsumedLen = page.writtenTo - page.consumedTo
+    else:
+      return default(PageSpan)
+
+  let
+    baseAddr = page.allocationStart
+    startAddr = offset(baseAddr, page.consumedTo)
+
+  let usableLen = if buffers.fauxEofPos != 0:
+    let maxSize = buffers.fauxEofPos - currentSpanEndPos
+    if maxSize < unconsumedLen:
+      maxSize
+    else:
+      unconsumedLen
+  else:
+    unconsumedLen
+
+  page.consumedTo += usableLen
+  currentSpanEndPos += usableLen
+
+  PageSpan(startAddr: startAddr,
+           endAddr: offset(startAddr, usableLen))
 
 func writableSpan*(page: PageRef): PageSpan =
   let baseAddr = allocationStart(page)
@@ -115,6 +147,13 @@ func trackWrittenTo*(buffers: PageBuffers, spanHeadPos: ptr byte) =
     var topPage = buffers.queue.peekLast
     topPage.writtenTo = distance(topPage.allocationStart, spanHeadPos)
 
+proc setFauxEof*(buffers: PageBuffers, pos: Natural): Natural =
+  result = buffers.fauxEofPos
+  buffers.fauxEofPos = pos
+
+proc restoreEof*(buffers: PageBuffers, pos: Natural) =
+  buffers.fauxEofPos = pos
+
 func addWritablePage*(buffers: PageBuffers, pageSize: Natural): PageRef =
   trackWrittenToEnd(buffers)
   result = PageRef(data: allocRef newString(pageSize))
@@ -135,25 +174,6 @@ func addWritablePage*(buffers: PageBuffers): PageRef =
 template getWritableSpan*(buffers: PageBuffers): PageSpan =
   let page = getWritablePage(buffers, buffers.pageSize)
   writableSpan(page)
-
-func nextReadableSpan*(buffers: PageBuffers, span: var PageSpan) =
-  let
-    firstPage = buffers.queue.peekFirst
-    pageReadableEnd = firstPage.readableEnd
-
-  if span.endAddr == nil:
-    fsAssert buffers.queue.len > 0
-    span = obtainReadableSpan buffers.queue[0]
-  elif span.endAddr != pageReadableEnd:
-    # Check whether the span points within the current page:
-    fsAssert distance(firstPage.allocationStart, span.endAddr) >= 0 and
-             distance(span.endAddr, pageReadableEnd) >= 0
-    span.endAddr = pageReadableEnd
-    firstPage.consumedTo = firstPage.writtenTo
-  else:
-    fsAssert buffers.queue.len > 1
-    discard buffers.queue.popFirst
-    span = obtainReadableSpan buffers.queue[0]
 
 func stringFromBytes(src: pointer, srcLen: Natural): string =
   result = newString(srcLen)
