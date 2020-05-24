@@ -13,7 +13,6 @@ type
   Page* = object
     consumedTo*: Natural
     writtenTo*: Natural
-    fauxEofAt*: Natural
     data*: ref string
 
   PageRef* = ref Page
@@ -37,8 +36,6 @@ const
     # that go through a fast O(0) path in the allocator.
   defaultPageSize* = 4096 - nimAllocatorMetadataSize
   maxStackUsage* = 16384
-
-  noEofChange* = high(Natural)
 
 when debugHelpers:
   proc describeBuffers*(context: static string, buffers: PageBuffers) =
