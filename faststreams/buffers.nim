@@ -151,9 +151,13 @@ proc setFauxEof*(buffers: PageBuffers, pos: Natural): Natural =
 proc restoreEof*(buffers: PageBuffers, pos: Natural) =
   buffers.fauxEofPos = pos
 
+template allocWritablePage*(pageSize: Natural, writtenToParam: Natural = 0): auto =
+  PageRef(data: allocRef newString(pageSize),
+          writtenTo: writtenToParam)
+
 func addWritablePage*(buffers: PageBuffers, pageSize: Natural): PageRef =
   trackWrittenToEnd(buffers)
-  result = PageRef(data: allocRef newString(pageSize))
+  result = allocWritablePage(pageSize)
   buffers.queue.addLast result
 
 func getWritablePage*(buffers: PageBuffers,

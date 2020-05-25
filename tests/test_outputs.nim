@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  os, unittest, random,
+  os, unittest, random, strformat,
   stew/ranges/ptr_arith,
   ../faststreams, ../faststreams/textio
 
@@ -17,10 +17,12 @@ proc repeat(b: byte, count: int): seq[byte] =
   result = newSeq[byte](count)
   for i in 0 ..< count: result[i] = b
 
+const line = "123456789123456789123456789123456789\n\n\n\n\n"
+
 proc randomBytes(n: int): seq[byte] =
   result.newSeq n
   for i in 0 ..< n:
-    result[i] = byte(rand(255))
+    result[i] = byte(rand(line))
 
 proc readAllAndClose(s: InputStream): seq[byte] =
   while s.readable:
@@ -152,89 +154,31 @@ suite "output stream":
 
     checkOutputsMatch()
 
+  template undelayedOutput(content: seq[byte]) {.dirty.} =
+    nimSeq.add content
+    streamWritingToExistingBuffer.write content
+
   test "delayed write":
     output "initial output\n"
     const delayedWriteContent = bytes "delayed write\n"
 
-    var cursor = memStream.delayFixedSizeWrite(delayedWriteContent.len)
+    var memCursor = memStream.delayFixedSizeWrite(delayedWriteContent.len)
+    var fileCursor = fileStream.delayVarSizeWrite(delayedWriteContent.len + 50)
+
     let cursorStart = memStream.pos
 
-    nimSeq.add delayedWriteContent
-    fileStream.write delayedWriteContent
-    streamWritingToExistingBuffer.write delayedWriteContent
+    undelayedOutput delayedWriteContent
 
     var bytesWritten = 0
-    for i, count in [2]: # 12, 342, 2121, 23, 1, 34012, 932]:
+    for i, count in [2, 12, 342, 2121, 23, 1, 34012, 932]:
       output repeat(byte(i), count)
       bytesWritten += count
       check memStream.pos - cursorStart == bytesWritten
 
-    cursor.finalWrite delayedWriteContent
+    memCursor.finalWrite delayedWriteContent
+    fileCursor.finalWrite delayedWriteContent
 
     checkOutputsMatch(skipUnbufferedFile = true)
-
-  test "multi-page delayed writes":
-    randomize(1000)
-
-    type
-      DelayedWrite = object
-        cursor: WriteCursor
-        content: seq[byte]
-        written: int
-
-    var delayedWrites = newSeq[DelayedWrite]()
-
-    for i in 0..50:
-      let
-        size = rand(8000) + 2000
-        randomBytes = randomBytes(size)
-        decision = rand(100)
-
-      if decision < 70:
-        # Write at some random cursor
-        if delayedWrites.len == 0:
-          continue
-
-        let
-          i = rand(delayedWrites.len - 1)
-          written = delayedWrites[i].written
-          remaining = delayedWrites[i].content.len - written
-          toWrite = min(rand(remaining) + 10, remaining)
-
-        delayedWrites[i].cursor.write delayedWrites[i].content[written ..< written + toWrite]
-        delayedWrites[i].written += toWrite
-
-        if remaining - toWrite == 0:
-          finalize delayedWrites[i].cursor
-          if i != delayedWrites.len - 1:
-            swap(delayedWrites[i], delayedWrites[^1])
-          delayedWrites.setLen(delayedWrites.len - 1)
-
-      elif decision < 90:
-        # Normal write
-        memStream.write randomBytes
-        nimSeq.add randomBytes
-
-      else:
-        # Create cursor
-        nimSeq.add randomBytes
-        delayedWrites.add DelayedWrite(
-          cursor: memStream.delayFixedSizeWrite(randomBytes.len),
-          content: randomBytes,
-          written: 0)
-
-      # Check that the stream position is consistently tracked at every step
-      check nimSeq.len == memStream.pos
-
-    # Write all unwritten data to all outstanding cursors
-    for dw in mitems(delayedWrites):
-      let remaining = dw.content.len - dw.written
-      dw.cursor.write dw.content[dw.written ..< dw.written + remaining]
-      finalize dw.cursor
-
-    # The final outputs are the same
-    let resultsAreEqual = nimSeq == memStream.getOutput
-    check resultsAreEqual
 
   test "float output":
     let basic: float64 = 12345.125
@@ -248,3 +192,136 @@ suite "output stream":
     outputText tiny
 
     checkOutputsMatch()
+
+suite "randomized tests":
+  type
+    WriteTypes = enum
+      FixedSize
+      VarSize
+      Mixed
+
+    DelayedWrite = object
+      isFixedSize: bool
+      fixedSizeCursor: WriteCursor
+      varSizeCursor: VarSizeWriteCursor
+      content: seq[byte]
+      written: int
+
+  proc randomizedCursorsTestImpl(stream: OutputStream,
+                                 seed = 1000,
+                                 iterations = 1000,
+                                 minWriteSize = 500,
+                                 maxWriteSize = 1000,
+                                 writeTypes = Mixed,
+                                 varSizeVariance = 50): seq[byte] =
+    randomize seed
+
+    var delayedWrites = newSeq[DelayedWrite]()
+    let writeSizeSpread = maxWriteSize - minWriteSize
+
+    for i in 0 ..< iterations:
+      let decision = rand(100)
+
+      if decision < 20:
+        # Write at some random cursor
+        if delayedWrites.len > 0:
+          let
+            i = rand(delayedWrites.len - 1)
+            written = delayedWrites[i].written
+            remaining = delayedWrites[i].content.len - written
+            toWrite = min(rand(remaining) + 10, remaining)
+
+          if delayedWrites[i].isFixedSize:
+            delayedWrites[i].fixedSizeCursor.write delayedWrites[i].content[written ..< written + toWrite]
+
+          delayedWrites[i].written += toWrite
+
+          if remaining - toWrite == 0:
+            if delayedWrites[i].isFixedSize:
+              finalize delayedWrites[i].fixedSizeCursor
+            else:
+              finalWrite delayedWrites[i].varSizeCursor, delayedWrites[i].content
+
+            if i != delayedWrites.len - 1:
+              swap(delayedWrites[i], delayedWrites[^1])
+            delayedWrites.setLen(delayedWrites.len - 1)
+
+        continue
+
+      let
+        size = rand(writeSizeSpread) + minWriteSize
+        randomBytes = randomBytes(size)
+
+      if decision < 90:
+        # Normal write
+        result.add randomBytes
+        stream.write randomBytes
+
+      else:
+        # Create cursor
+        result.add randomBytes
+
+        let isFixedSize = case writeTypes
+          of FixedSize: true
+          of VarSize: false
+          of Mixed: rand(10) > 3
+
+        if isFixedSize:
+          let cursor = stream.delayFixedSizeWrite(randomBytes.len)
+
+          delayedWrites.add DelayedWrite(
+            fixedSizeCursor: cursor,
+            content: randomBytes,
+            written: 0,
+            isFixedSize: true)
+        else:
+          let
+            overestimatedBytes = rand(varSizeVariance)
+            cursorSize = randomBytes.len + overestimatedBytes
+            cursor = stream.delayVarSizeWrite(cursorSize)
+
+          delayedWrites.add DelayedWrite(
+            varSizeCursor: cursor,
+            content: randomBytes,
+            written: 0,
+            isFixedSize: false)
+
+    # Write all unwritten data to all outstanding cursors
+    if stream != nil:
+      for dw in mitems(delayedWrites):
+        if dw.isFixedSize:
+          let remaining = dw.content.len - dw.written
+          dw.fixedSizeCursor.write dw.content[dw.written ..< dw.written + remaining]
+          finalize dw.fixedSizeCursor
+        else:
+          dw.varSizeCursor.finalWrite dw.content
+
+  template randomizedCursorsTest(streamExpr: OutputStreamHandle,
+                                 writeTypesExpr: WriteTypes,
+                                 varSizeVarianceExpr: int,
+                                 customChecks: untyped = nil) =
+    const testName = "randomized cursor test [" & astToStr(streamExpr) &
+                     ";writes=" & $writeTypesExpr & ",variance=" & $varSizeVarianceExpr & "]"
+    test testName:
+      let s = streamExpr
+      var referenceResult = randomizedCursorsTestImpl(stream = s,
+                                                      writeTypes = writeTypesExpr,
+                                                      varSizeVariance = varSizeVarianceExpr)
+
+      when astToStr(customChecks) == "nil":
+        let streamResult = s.getOutput()
+        let resultsMatch = streamResult == referenceResult
+        when false:
+          if not resultsMatch:
+            writeFile("reference-result.txt", referenceResult)
+            writeFile("stream-result.txt", streamResult)
+        check resultsMatch
+      else:
+        customChecks
+
+      check referenceResult.len == s.pos
+
+  randomizedCursorsTest(memoryOutput(), FixedSize, 0)
+  randomizedCursorsTest(memoryOutput(), VarSize, 100)
+  randomizedCursorsTest(memoryOutput(pageSize = 10), Mixed, 10)
+

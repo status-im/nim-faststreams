@@ -379,6 +379,7 @@ proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
       startAddr = s.span.startAddr
       endAddr = offset(startAddr, maxSize)
 
+    inc s.extCursorsCount
     result = VarSizeWriteCursor WriteCursor(
       stream: s,
       span: PageSpan(startAddr: startAddr, endAddr: endAddr))
@@ -387,14 +388,17 @@ proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
     s.span.startAddr = endAddr
 
   else:
+    trackWrittenTo(s.buffers, s.span.startAddr)
+
     let
       nextPageSize = nextAlignedSize(maxSize, s.buffers.pageSize)
-      nextPage = s.buffers.addWritablePage(nextPageSize)
+      nextPage = allocWritablePage(nextPageSize, maxSize)
       nextPageSpan = nextPage.fullSpan
       cursorEndAddr = offset(nextPageSpan.startAddr, maxSize)
 
-    nextPage.consumedTo = -maxSize
+    s.buffers.queue.addLast nextPage
 
+    inc s.extCursorsCount
     result = VarSizeWriteCursor WriteCursor(
       stream: s,
       span: PageSpan(startAddr: nextPageSpan.startAddr,
@@ -402,7 +406,7 @@ proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
 
     s.span = PageSpan(startAddr: cursorEndAddr,
                       endAddr: nextPageSpan.endAddr)
-    s.spanEndPos += nextPageSize
+    s.spanEndPos += nextPageSize - runway
 
 proc finalize*(cursor: var WriteCursor) =
   fsAssert cursor.stream.extCursorsCount > 0
@@ -419,19 +423,21 @@ proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
   let overestimatedBytes = cursor.span.len - data.len
   fsAssert overestimatedBytes >= 0
 
+  WriteCursor(c).stream.spanEndPos -= overestimatedBytes
+
   for page in items(cursor.stream.buffers.queue):
     let baseAddr = page.allocationStart
-    if page.allocationEnd == cursor.span.endAddr:
-      # This is a page ending cursor
-      page.writtenTo = distance(baseAddr, cursor.span.startAddr) + data.len
-      copyMem(cursor.span.startAddr, unsafeAddr data[0], data.len)
-      finalize cursor
-      return
-
     if cursor.span.startAddr == baseAddr:
       # This is page starting cursor
       page.consumedTo = overestimatedBytes
       copyMem(offset(baseAddr, overestimatedBytes), unsafeAddr data[0], data.len)
+      finalize cursor
+      return
+
+    if page.readableEnd == cursor.span.endAddr:
+      # This is a page ending cursor
+      page.writtenTo = distance(baseAddr, cursor.span.startAddr) + data.len
+      copyMem(cursor.span.startAddr, unsafeAddr data[0], data.len)
       finalize cursor
       return
 
