@@ -300,6 +300,7 @@ proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
 
   let runway = s.span.len
   if rangeLen > runway:
+    fsAssert s.buffers != nil
     return s.buffers.setFauxEof(rangeLen - runway + s.spanEndPos)
   else:
     s.span.endAddr = offset(s.span.startAddr, rangeLen)
@@ -307,7 +308,7 @@ proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
     s.spanEndPos -= bytesToUnconsume
     if s.buffers != nil:
       s.buffers.queue.peekFirst.consumedTo -= bytesToUnconsume
-    return s.buffers.setFauxEof(s.spanEndPos)
+      return s.buffers.setFauxEof(s.spanEndPos)
 
 template withReadableRange*(sp: InputStream|AsyncInputStream,
                             rangeLen: Natural,
