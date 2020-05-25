@@ -325,7 +325,7 @@ template withReadableRange*(sp: InputStream|AsyncInputStream,
   finally:
     s.vtable = vtable
     s.span.endAddr = origEndAddr
-    restoreEof(s.buffers, origEof)
+    if s.buffers != nil: restoreEof(s.buffers, origEof)
 
 let fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
