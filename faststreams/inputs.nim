@@ -295,7 +295,6 @@ template totalUnconsumedBytes*(s: AsyncInputStream): Natural =
   totalUnconsumedBytes InputStream(s)
 
 proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
-  fsAssert rangeLen > 0
   s.vtable = nil
 
   let runway = s.span.len
