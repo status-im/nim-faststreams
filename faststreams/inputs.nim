@@ -282,8 +282,12 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
   ## buffers and that can be consumed with `read` or `advance`.
   let
     localRunway = s.span.len
-    runwayInBuffers = if s.buffers == nil: 0
-                      else: s.buffers.totalBufferedBytes
+    runwayInBuffers = if s.buffers == nil:
+                        0
+                      elif s.buffers.fauxEofPos != 0:
+                        s.buffers.fauxEofPos - s.spanEndPos
+                      else:
+                        s.buffers.totalBufferedBytes
 
   if localRunway == 0 and runwayInBuffers > 0:
     getNewSpan s

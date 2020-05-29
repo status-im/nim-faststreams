@@ -48,6 +48,9 @@ procSuite "input stream":
       test "next returns none":
         check input.next.isNone
 
+  emptyInputTests "memoryInput":
+    var input = InputStream()
+
   emptyInputTests "unsafeMemoryInput":
     var str = ""
     var input = unsafeMemoryInput(str)
@@ -140,12 +143,16 @@ procSuite "input stream":
     let s = fileInput(asciiTableFile, pageSize = 100)
     if s.readable(20):
       s.withReadableRange(20, r):
+        check r.len.get == 20
+        check r.totalUnconsumedBytes == 20
         check r.readAll.len == 20
 
     check s.readable
 
     if s.readable(200):
       s.withReadableRange(200, r):
+        check r.len.get == 200
+        check r.totalUnconsumedBytes == 200
         check r.readAll.len == 200
 
     check s.readable
