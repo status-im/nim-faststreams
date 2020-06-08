@@ -20,18 +20,20 @@ when faststreams_async_backend == "chronos":
 
 elif faststreams_async_backend in ["std", "asyncdispatch"]:
   import
-    std/[asyncfutures, asyncmacro]
+    std/asyncdispatch
   
   export
-    asyncfutures, asyncmacro
+    asyncdispatch
 
-  template fsAwait*(awaited: Future[T]): untyped =
+  template fsAwait*(awaited: Future): untyped =
     # TODO revisit after https://github.com/nim-lang/Nim/pull/12085/ is merged
     let f = awaited
     yield f
     if not isNil(f.error):
       raise f.error
     f.read
+
+  type Duration* = int
 
 else:
   {.fatal: "Unrecognized network backend: " & faststreams_async_backend.}

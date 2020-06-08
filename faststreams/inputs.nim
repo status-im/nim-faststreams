@@ -108,7 +108,7 @@ template close*(sp: AsyncInputStream) =
   disconnectInputDevice(s)
   preventFurtherReading(s)
   if s.closeFut != nil:
-    await s.closeFut
+    fsAwait s.closeFut
 
 template closeNoWait*(sp: AsyncInputStream|InputStream) =
   ## Close the stream without waiting even if's async.
@@ -234,7 +234,7 @@ proc readOnce*(sp: AsyncInputStream): Future[Natural] {.async.} =
   let s = InputStream(sp)
   fsAssert s.buffers != nil and s.vtable != nil
 
-  result = await s.vtable.readAsync(s, nil, 0)
+  result = fsAwait s.vtable.readAsync(s, nil, 0)
 
   if s.buffers.eofReached:
     disconnectInputDevice(s)
@@ -245,7 +245,7 @@ proc readOnce*(sp: AsyncInputStream): Future[Natural] {.async.} =
 proc timeoutToNextByteImpl(s: AsyncInputStream,
                            deadline: Future): Future[bool] {.async.} =
   let readFut = s.readOnce
-  await readFut or deadline
+  fsAwait readFut or deadline
   if not readFut.finished:
     readFut.cancel()
     return true
@@ -257,14 +257,14 @@ template timeoutToNextByte*(sp: AsyncInputStream, deadline: Future): bool =
   if readableNow(s):
     true
   else:
-    await timeoutToNextByteImpl(s, deadline)
+    fsAwait timeoutToNextByteImpl(s, deadline)
 
 template timeoutToNextByte*(sp: AsyncInputStream, timeout: Duration): bool =
   let s = sp
   if readableNow(s):
     true
   else:
-    await timeoutToNextByteImpl(s, sleepAsync(timeout))
+    fsAwait timeoutToNextByteImpl(s, sleepAsync(timeout))
 
 proc closeAsync*(s: AsyncInputStream) {.async.} =
   close s

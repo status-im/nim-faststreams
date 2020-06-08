@@ -123,7 +123,7 @@ template close*(sp: AsyncOutputStream) =
   flush(Async s)
   disconnectOutputDevice(s)
   if s.closeFut != nil:
-    await s.closeFut
+    fsAwait s.closeFut
 
 proc closeAsync*(s: AsyncOutputStream) {.async.} =
   close s
@@ -311,7 +311,7 @@ proc drainAllBuffersSync(s: OutputStream, buf: pointer, bufSize: Natural) =
     s.spanEndPos += s.span.len
 
 proc drainAllBuffersAsync(s: OutputStream, buf: pointer, bufSize: Natural) {.async.} =
-  await s.vtable.writeAsync(s, buf, bufSize)
+  fsAwait s.vtable.writeAsync(s, buf, bufSize)
   s.span = s.buffers.getWritableSpan()
   s.spanEndPos += s.span.len
 

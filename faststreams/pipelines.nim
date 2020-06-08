@@ -15,7 +15,7 @@ type
 template enterWait(fut: var Future, context: static string) =
   let wait = newFuture[void](context)
   fut = wait
-  try: await wait
+  try: fsAwait wait
   finally: fut = nil
 
 template awake(fp: Future) =
@@ -312,7 +312,7 @@ macro executePipeline*(start: AsyncInputStream, steps: varargs[untyped]): untype
   closingCall.insert(1, newCall(bindSym"initReader", stepInput))
 
   pipelineBody.add quote do:
-    await allFutures(`pipelineSteps`)
+    fsAwait allFutures(`pipelineSteps`)
     `closingCall`
 
   result = quote do:
@@ -326,7 +326,7 @@ macro executePipeline*(start: AsyncInputStream, steps: varargs[untyped]): untype
     proc pipelineProc(`stream`: AsyncInputStream): Future[RetType] {.async.} =
       when UserOpRetType is Future:
         var f = `pipelineBody`
-        return await(f)
+        return fsAwait(f)
       else:
         return `pipelineBody`
 

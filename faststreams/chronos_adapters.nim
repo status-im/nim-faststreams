@@ -26,17 +26,15 @@ proc chronosCloseWait(t: StreamTransport)
     await t.closeWait()
 
 proc chronosReadOnce(s: ChronosInputStream,
-                     dst: pointer, dstLen: Natural): Future[Natural]
-                    {.async, raises: [IOError, Defect].} =
+                     dst: pointer, dstLen: Natural): Future[Natural] {.async.} =
   fsTranslateErrors readingErrMsg:
-    return implementSingleRead(s.buffers, dst, dstLen, {},
+    return implementSingleRead(s.buffers, dst, dstLen, ReadFlags {},
                                readStartAddr, readLen):
       await s.transport.readOnce(readStartAddr, readLen)
 
-proc chronosWrites(s: ChronosOutputStream, src: pointer, srcLen: Natural)
-                  {.async, raises: [IOError, Defect].} =
+proc chronosWrites(s: ChronosOutputStream, src: pointer, srcLen: Natural) {.async.} =
   fsTranslateErrors writeIncompleteErrMsg:
-    implementWrites(s.buffers, src, srcLen, "StreamTransport"
+    implementWrites(s.buffers, src, srcLen, "StreamTransport",
                     writeStartAddr, writeLen):
       await s.transport.write(writeStartAddr, writeLen)
 
@@ -44,13 +42,15 @@ proc chronosWrites(s: ChronosOutputStream, src: pointer, srcLen: Natural)
 let chronosInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    var cs = ChronosInputStream(s)
-    fsAssert cs.allowWaitFor
-    waitFor chronosReadOnce(cs, dst, dstLen)
+    fsTranslateErrors "Unexpected exception from Chronos async macro":
+      var cs = ChronosInputStream(s)
+      fsAssert cs.allowWaitFor
+      return waitFor chronosReadOnce(cs, dst, dstLen)
   ,
   readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    chronosReadOnce(ChronosInputStream s, dst, dstLen)
+    fsTranslateErrors "Unexpected exception from merely forwarding a future":
+      return chronosReadOnce(ChronosInputStream s, dst, dstLen)
   ,
   closeSync: proc (s: InputStream)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
@@ -64,10 +64,11 @@ let chronosInputVTable = InputStreamVTable(
 
 func chronosInput*(s: StreamTransport,
                    pageSize = defaultPageSize,
-                   allowWaitFor = false): InputStreamHandle =
-  makeHandle ChronosInputStream(
+                   allowWaitFor = false): AsyncInputStream =
+  AsyncInputStream ChronosInputStream(
     vtable: vtableAddr chronosInputVTable,
     buffers: initPageBuffers(pageSize),
+    transport: s,
     allowWaitFor: allowWaitFor)
 
 let chronosOutputVTable = OutputStreamVTable(
@@ -88,15 +89,15 @@ let chronosOutputVTable = OutputStreamVTable(
   ,
   closeAsync: proc (s: OutputStream): Future[void]
                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    chronosCloseWait ChronosOutputtream(s).transport
+    chronosCloseWait ChronosOutputStream(s).transport
 )
 
 func chronosOutput*(s: StreamTransport,
                     pageSize = defaultPageSize,
-                    allowWaitFor = false): OutputStreamHandle =
-  makeHandle ChronosOutputStream(
-    vtable: vtableAddr(chronosOuputVTable),
-    buffers: initPageBuffers(pageSize)
+                    allowWaitFor = false): AsyncOutputStream =
+  AsyncOutputStream ChronosOutputStream(
+    vtable: vtableAddr(chronosOutputVTable),
+    buffers: initPageBuffers(pageSize),
     transport: s,
     allowWaitFor: allowWaitFor)
 

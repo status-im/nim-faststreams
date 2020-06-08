@@ -126,7 +126,7 @@ const
   NewLines* = {'\r', '\n'}
   Digits* = {'0'..'9'}
 
-proc readLine*(s: InputStream, keepEol = false): TaintedString =
+proc readLine*(s: InputStream, keepEol = false): TaintedString {.fsMultiSync.} =
   fsAssert readableNow(s)
 
   while s.readable:
