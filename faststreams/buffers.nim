@@ -25,8 +25,10 @@ type
     waitingReader*: Future[void]
     waitingWriter*: Future[void]
 
-    eofReached*: bool
     fauxEofPos*: Natural
+    currentReadablePage*: Natural
+    rewindPoints*: uint8
+    eofReached*: bool
 
 const
   nimPageSize* = 4096
@@ -84,12 +86,16 @@ func obtainReadableSpan*(buffers: PageBuffers,
   if buffers.queue.len == 0:
     return default(PageSpan)
 
-  var page = buffers.queue[0]
+  var page = buffers.queue[buffers.currentReadablePage]
   var unconsumedLen = page.writtenTo - page.consumedTo
   if unconsumedLen == 0:
-    if buffers.queue.len > 1:
-      discard buffers.queue.popFirst
-      page = buffers.queue[0]
+    let nextReadablePage = buffers.currentReadablePage + 1
+    if buffers.queue.len > nextReadablePage:
+      if buffers.rewindPoints > 0:
+        buffers.currentReadablePage = nextReadablePage
+      else:
+        discard buffers.queue.popFirst
+      page = buffers.queue[buffers.currentReadablePage]
       unconsumedLen = page.writtenTo - page.consumedTo
     else:
       return default(PageSpan)

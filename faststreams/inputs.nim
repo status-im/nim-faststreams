@@ -385,7 +385,7 @@ proc fileInput*(filename: string,
     buffers: initPageBuffers(pageSize),
     file: file)
 
-proc unsafeMemoryInput*(mem: openarray[byte]): InputStreamHandle =
+proc unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
   let head = unsafeAddr mem[0]
 
   makeHandle InputStream(
@@ -417,7 +417,7 @@ func memoryInput*(buffers: PageBuffers): InputStreamHandle =
                          span: span,
                          spanEndPos: spanEndPos)
 
-func memoryInput*(data: openarray[byte]): InputStreamHandle =
+func memoryInput*(data: openArray[byte]): InputStreamHandle =
   let stream = if data.len > 0:
     let
       buffers = initPageBuffers(data.len)
@@ -434,7 +434,7 @@ func memoryInput*(data: openarray[byte]): InputStreamHandle =
 
   makeHandle stream
 
-func memoryInput*(data: openarray[char]): InputStreamHandle =
+func memoryInput*(data: openArray[char]): InputStreamHandle =
   memoryInput charsToBytes(data)
 
 proc resetBuffers*(s: InputStream, buffers: PageBuffers) =
@@ -766,7 +766,7 @@ template readIntoExImpl(s: InputStream,
 
   dstLen - bytesDeficit
 
-proc readIntoEx*(s: InputStream, dst: var openarray[byte]): int =
+proc readIntoEx*(s: InputStream, dst: var openArray[byte]): int =
   ## Read data into the destination buffer.
   ##
   ## Returns the number of bytes that were successfully
@@ -777,22 +777,27 @@ proc readIntoEx*(s: InputStream, dst: var openarray[byte]): int =
   let dstLen = dst.len
   readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
 
-proc readInto*(s: InputStream, target: var openarray[byte]): bool =
+proc readInto*(s: InputStream, dst: var openArray[byte]): bool =
   ## Read data into the destination buffer.
   ##
   ## Returns `false` if EOF was reached before the buffer
   ## was fully populated. if you need precise information
   ## regarding the number of bytes read, see `readIntoEx`.
-  s.readIntoEx(target) == target.len
+  s.readIntoEx(dst) == dst.len
 
-template readIntoEx*(sp: AsyncInputStream, dst: var openarray[byte]): int =
+proc readInto*(s: InputStream, dst: var openArray[char]): bool =
+  let dstAddr = cast[ptr byte](addr dst[0])
+  let dstLen = dst.len
+  readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync) == dstLen
+
+template readIntoEx*(sp: AsyncInputStream, dst: var openArray[byte]): int =
   let s = sp
   # BEWARE! `openArrayToPair` here is needed to avoid
   # double evaluation of the `dst` expression:
   let (dstAddr, dstLen) = openArrayToPair(dst)
   readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync)
 
-template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
+template readInto*(sp: AsyncInputStream, dst: var openArray[byte]): bool =
   ## Asynchronously read data into the destination buffer.
   ##
   ## Returns `false` if EOF was reached before the buffer
@@ -823,7 +828,7 @@ template allocStackMem(tmpSeq: var seq[byte], _, n: Natural): ptr byte =
 
 template readNImpl(sp: InputStream,
                    np: Natural,
-                   allocMem: untyped): openarray[byte] =
+                   allocMem: untyped): openArray[byte] =
   let
     s = sp
     n = np
@@ -833,7 +838,7 @@ template readNImpl(sp: InputStream,
   # to appear in different branches of an if statement, the code must
   # be written in this branch-free linear fashion. The `dataCopy` seq
   # may remain empty in the case where we use stack memory or return
-  # an `openarray` from the existing span.
+  # an `openArray` from the existing span.
   var tmpSeq: seq[byte]
   var startAddr: ptr byte
 
@@ -847,28 +852,18 @@ template readNImpl(sp: InputStream,
 
   makeOpenArray(startAddr, n)
 
-template read*(sp: InputStream, np: static Natural): openarray[byte] =
+template read*(sp: InputStream, np: static Natural): openArray[byte] =
   const n = np
   when n < maxStackUsage:
     readNImpl(sp, n, allocStackMem)
   else:
     readNImpl(sp, n, allocHeapMem)
 
-template read*(s: InputStream, n: Natural): openarray[byte] =
+template read*(s: InputStream, n: Natural): openArray[byte] =
   readNImpl(s, n, allocHeapMem)
 
-template read*(s: AsyncInputStream, n: Natural): openarray[byte] =
+template read*(s: AsyncInputStream, n: Natural): openArray[byte] =
   read InputStream(s), n
-
-proc lookAheadMatch*(s: InputStream, data: openarray[byte]): bool =
-  for i in 0 ..< data.len:
-    if s.peekAt(i) != data[i]:
-      return false
-
-  return true
-
-template lookAheadMatch*(s: AsyncInputStream, data: openarray[byte]): bool =
-  lookAheadMatch InputStream(s)
 
 proc next*(s: InputStream): Option[byte] =
   if readable(s):
@@ -886,4 +881,31 @@ proc pos*(s: InputStream): int {.inline.} =
 
 template pos*(s: AsyncInputStream): int =
   pos InputStream(s)
+
+proc createRewindPoint*(s: InputStream): int =
+  if s.buffers != nil:
+    inc s.buffers.rewindPoints
+  return s.pos
+
+proc rewindTo*(s: InputStream, pos: int) =
+  if s.buffers != nil:
+    doAssert s.buffers.rewindPoints > 0
+    dec s.buffers.rewindPoints
+
+  let
+    currentPos = s.pos
+    rewindedBytes = currentPos - pos
+
+  # TODO: Make this safe in the presence of multiple pages
+  s.span.startAddr = offset(s.span.startAddr, -rewindedBytes)
+
+proc lookAheadMatch*(s: InputStream, data: openArray[byte]): bool =
+  for i in 0 ..< data.len:
+    if s.peekAt(i) != data[i]:
+      return false
+
+  return true
+
+template lookAheadMatch*(s: AsyncInputStream, data: openArray[byte]): bool =
+  lookAheadMatch InputStream(s)
 
