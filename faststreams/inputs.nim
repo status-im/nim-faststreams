@@ -166,7 +166,7 @@ let memFileInputVTable = InputStreamVTable(
 )
 
 proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHandle
-                  {.raises: [IOError, OSError].} =
+                  {.raises: [IOError].} =
   ## Creates an input stream for reading the contents of a memory-mapped file.
   ##
   ## Using this API will provide better performance than `fileInput`,
@@ -187,24 +187,27 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
   # Nim's memfiles module will fail to map an empty file,
   # but we don't consider this a problem. The stream will
   # be in non-readable state from the start.
-  let fileSize = getFileSize(filename)
-  if fileSize == 0:
-    return makeHandle InputStream()
+  try:
+    let fileSize = getFileSize(filename)
+    if fileSize == 0:
+      return makeHandle InputStream()
 
-  let
-    memFile = memfiles.open(filename,
-                            mode = fmRead,
-                            mappedSize = mappedSize,
-                            offset = offset)
-    head = cast[ptr byte](memFile.mem)
-    mappedSize = memFile.size
+    let
+      memFile = memfiles.open(filename,
+                              mode = fmRead,
+                              mappedSize = mappedSize,
+                              offset = offset)
+      head = cast[ptr byte](memFile.mem)
+      mappedSize = memFile.size
 
-  makeHandle MemFileInputStream(
-    vtable: vtableAddr memFileInputVTable,
-    span: PageSpan(
-      startAddr: head,
-      endAddr: offset(head, mappedSize)),
-    file: memFile)
+    makeHandle MemFileInputStream(
+      vtable: vtableAddr memFileInputVTable,
+      span: PageSpan(
+        startAddr: head,
+        endAddr: offset(head, mappedSize)),
+      file: memFile)
+  except OSError as err:
+    raise newException(IOError, err.msg, err)
 
 func getNewSpan(s: InputStream) =
   let buffers = s.buffers
