@@ -249,16 +249,19 @@ template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
   {.noSideEffect.}:
     unsafeAddr vtable
 
-proc fileOutput*(filename: string,
-                 fileMode: FileMode = fmWrite,
+proc fileOutput*(f: File,
                  pageSize = defaultPageSize): OutputStreamHandle
                 {.raises: [IOError, Defect].} =
-  let f = open(filename, fileMode)
-
   makeHandle FileOutputStream(
     vtable: vtableAddr fileOutputVTable,
     buffers: initPageBuffers(pageSize),
     file: f)
+
+proc fileOutput*(filename: string,
+                 fileMode: FileMode = fmWrite,
+                 pageSize = defaultPageSize): OutputStreamHandle
+                {.raises: [IOError, Defect].} =
+  fileOutput(open(filename, fileMode), pageSize)
 
 proc pos*(s: OutputStream): int =
   s.spanEndPos - s.span.len
@@ -690,35 +693,36 @@ proc writeMemCopy*[T](c: var WriteCursor, value: T) =
 proc write*(c: var WriteCursor, str: string) =
   writeBytesToCursor(c, str.toOpenArrayByte(0, str.len - 1))
 
-template consumeOutputs*(sp: OutputStream, bytesVar, body: untyped) =
+type
+  OutputConsumingProc = proc (data: openArray[byte])
+                             {.gcsafe, raises: [Defect].}
+
+proc consumeOutputsImpl(s: OutputStream, consumer: OutputConsumingProc) =
+  let runway = s.span.len
+
+  fsAssert s.extCursorsCount == 0 and s.buffers != nil
+  trackWrittenTo(s.buffers, s.span.startAddr)
+
+  for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
+    consumer(makeOpenArray(pageReadableStart, pageLen))
+
+  s.span = getWritableSpan(s.buffers)
+  s.spanEndPos += s.span.len - runway
+
+template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeOutputs` on an unbuffered stream
   ## or an unsafe memory stream is considered a Defect.
   ##
   ## Before consuming the outputs, all outstanding delayed writes must
   ## be finalized.
-  let s = sp
-  fsAssert s.extCursorsCount == 0 and s.buffers != nil
-
-  for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
-    template bytesVar: untyped =
-      makeOpenArray(pageReadableStart, pageLen)
-
+  proc consumer(bytesVar: openarray[byte]) {.gcsafe, raises: [Defect].} =
     body
 
-template consumeContiguousOutput*(sp: OutputStream, bytesVar, body: untyped) =
-  ## Please note that calling `consumeContiguousOutput` on an unbuffered stream
-  ## or an unsafe memory stream is considered a Defect.
-  ##
-  ## Before consuming the output, all outstanding delayed writes must
-  ## be finalized.
-  ##
+  consumeOutputsImpl(s, consumer)
 
-  # TODO: This code is a bit too much to be inlined. Maybe this should be
-  # a proc with a callback, but this will restrict the types of variables
-  # it can write to. OTOH, perhaps only `consumePageBuffers` is the offending
-  # part.
+proc consumeContiguousOutputImpl(s: OutputStream, consumer: OutputConsumingProc) =
   var
-    s = sp
+    runway = s.span.len
     contigiousBytes: string
       # this may remain null
       # We are using a string, because `newStringOfCap` doesn't zero out
@@ -727,6 +731,7 @@ template consumeContiguousOutput*(sp: OutputStream, bytesVar, body: untyped) =
     bytesLen: int
 
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
+  s.buffers.trackWrittenTo s.span.startAddr
 
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
@@ -736,18 +741,30 @@ template consumeContiguousOutput*(sp: OutputStream, bytesVar, body: untyped) =
     page.consumedTo = 0
     page.writtenTo = 0
   else:
-    contigiousBytes = newStringOfCap(s.pos)
+    contigiousBytes = newStringOfCap(s.buffers.totalBufferedBytes)
 
     for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
       contigiousBytes.add makeOpenArray(cast[ptr char](pageReadableStart), pageLen)
 
-    bytesPtr = addr contigiousBytes[0]
+    bytesPtr = cast[ptr byte](addr contigiousBytes[0])
     bytesLen = contigiousBytes.len
 
-  template bytesVar: untyped =
-    makeOpenArray(bytesPtr, bytesLen)
+  consumer(makeOpenArray(bytesPtr, bytesLen))
 
-  body
+  s.span = s.buffers.getWritableSpan()
+  s.spanEndPos += s.span.len - runway
+
+template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
+  ## Please note that calling `consumeContiguousOutput` on an unbuffered stream
+  ## or an unsafe memory stream is considered a Defect.
+  ##
+  ## Before consuming the output, all outstanding delayed writes must
+  ## be finalized.
+  ##
+  proc consumer(bytesVar: openarray[byte]) {.gcsafe, raises: [Defect].} =
+    body
+
+  consumeContiguousOutputImpl(s, consumer)
 
 proc getOutput*(s: OutputStream, T: type string): string =
   ## Please note that calling `getOutput` on an unbuffered stream
