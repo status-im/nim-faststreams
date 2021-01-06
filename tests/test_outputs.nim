@@ -325,3 +325,46 @@ suite "randomized tests":
   randomizedCursorsTest(memoryOutput(), VarSize, 100)
   randomizedCursorsTest(memoryOutput(pageSize = 10), Mixed, 10)
 
+  test "randomized file roundtrip":
+    const randomBytesFileName = "random_bytes_file"
+
+    var
+      referenceBytes, restoredBytes: seq[byte]
+
+    try:
+      let output = fileOutput randomBytesFileName
+
+      for i in 0 .. 3000:
+        let bytes = randomBytes(rand(9999) + 1)
+        referenceBytes.add bytes
+        output.write bytes
+
+      close output
+
+      let input = fileInput randomBytesFileName
+
+      while input.readable(10000):
+        let r = 1 + rand(9999)
+        if r < 5000:
+          restoredBytes.add input.read(8000)
+          restoredBytes.add input.read(500)
+        elif r < 7000:
+          restoredBytes.add input.read(1)
+          restoredBytes.add input.read(2)
+          restoredBytes.add input.read(5)
+          restoredBytes.add input.read(17)
+          restoredBytes.add input.read(128)
+        else:
+          restoredBytes.add input.read(r)
+
+      while input.readable:
+        restoredBytes.add input.read
+
+      close input
+
+      doAssert referenceBytes == restoredBytes
+
+    finally:
+      if fileExists(randomBytesFileName):
+        removeFile randomBytesFileName
+

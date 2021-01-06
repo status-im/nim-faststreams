@@ -812,21 +812,22 @@ template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
   let (dstAddr, dstLen) = openArrayToPair(dst)
   readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync) == dstLen
 
-when defined(windows):
-  proc alloca(n: int): ptr byte {.importc, header: "<malloc.h>".}
-else:
-  proc alloca(n: int): ptr byte {.importc, header: "<alloca.h>".}
+template useHeapMem(_: Natural) =
+  var buffer: seq[byte]
 
-template allocHeapMem(tmpSeq: var seq[byte], n, _: Natural): ptr byte =
-  tmpSeq.setLen(n)
-  addr tmpSeq[0]
+  template allocMem(n: Natural): ptr byte =
+    buffer.setLen(n)
+    addr buffer[0]
 
-template allocStackMem(tmpSeq: var seq[byte], _, n: Natural): ptr byte =
-  alloca(n)
+template useStackMem(n: static Natural) =
+  var buffer: array[n, byte]
+
+  template allocMem(_: Natural): ptr byte =
+    addr buffer[0]
 
 template readNImpl(sp: InputStream,
                    np: Natural,
-                   allocMem: untyped): openarray[byte] =
+                   createAllocMemOp: untyped): openarray[byte] =
   let
     s = sp
     n = np
@@ -837,28 +838,35 @@ template readNImpl(sp: InputStream,
   # be written in this branch-free linear fashion. The `dataCopy` seq
   # may remain empty in the case where we use stack memory or return
   # an `openarray` from the existing span.
-  var tmpSeq: seq[byte]
   var startAddr: ptr byte
 
-  if n > runway:
-    startAddr = allocMem(tmpSeq, n, np)
-    let drained {.used.} = drainBuffersInto(s, startAddr, n)
-    fsAssert drained == n
-  else:
-    startAddr = s.span.startAddr
-    bumpPointer s.span, n
+  block:
+    # This defines the `allocMem` operation used below.
+    # See `useHeapMem` and `useStackMem` for the possible definitions.
+    # We are creating a block scope in order to allow multiple usages
+    # of `read` within a single scope (avoiding duplicate definitions
+    # of `allocMem`)
+    createAllocMemOp(np)
+
+    if n > runway:
+      startAddr = allocMem(n)
+      let drained {.used.} = drainBuffersInto(s, startAddr, n)
+      fsAssert drained == n
+    else:
+      startAddr = s.span.startAddr
+      bumpPointer s.span, n
 
   makeOpenArray(startAddr, n)
 
 template read*(sp: InputStream, np: static Natural): openarray[byte] =
   const n = np
   when n < maxStackUsage:
-    readNImpl(sp, n, allocStackMem)
+    readNImpl(sp, n, useStackMem)
   else:
-    readNImpl(sp, n, allocHeapMem)
+    readNImpl(sp, n, useHeapMem)
 
 template read*(s: InputStream, n: Natural): openarray[byte] =
-  readNImpl(s, n, allocHeapMem)
+  readNImpl(s, n, useHeapMem)
 
 template read*(s: AsyncInputStream, n: Natural): openarray[byte] =
   read InputStream(s), n
