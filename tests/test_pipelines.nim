@@ -38,6 +38,15 @@ template timeit(timerVar: var Nanos, code: untyped) =
   code
   timerVar = int(getTicks() - t0) div 1000000
 
+proc getOutput(sp: AsyncInputStream, T: type string): Future[string] {.async.} =
+  # this proc is a quick hack to let the test pass
+  # do not use it in production code
+  let size = sp.totalUnconsumedBytes()
+  if size > 0:
+    var data = newSeq[byte](size)
+    discard sp.readinto(data)
+    result = cast[string](data)
+
 procSuite "pipelines":
   let loremIpsum = """
     Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
@@ -117,4 +126,3 @@ procSuite "pipelines":
     let fsAsyncres = await f
 
     check fsAsyncRes == toUpperAscii(inputText)
-

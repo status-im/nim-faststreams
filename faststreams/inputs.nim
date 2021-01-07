@@ -789,7 +789,7 @@ proc readInto*(s: InputStream, target: var openarray[byte]): bool =
   s.readIntoEx(target) == target.len
 
 template readIntoEx*(sp: AsyncInputStream, dst: var openarray[byte]): int =
-  let s = sp
+  let s = InputStream(sp)
   # BEWARE! `openArrayToPair` here is needed to avoid
   # double evaluation of the `dst` expression:
   let (dstAddr, dstLen) = openArrayToPair(dst)
@@ -806,7 +806,7 @@ template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
   ## the expression will complete immediately.
   ## Otherwise, it will await more bytes to become available.
 
-  let s = sp
+  let s = InputStream(sp)
   # BEWARE! `openArrayToPair` here is needed to avoid
   # double evaluation of the `dst` expression:
   let (dstAddr, dstLen) = openArrayToPair(dst)
