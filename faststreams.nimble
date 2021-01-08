@@ -12,8 +12,17 @@ requires "nim >= 1.2.0",
          "testutils",
          "chronos"
 
-task test, "Run all tests":
-  exec "nim c -r -d:debug   --threads:on tests/all_tests"
-  exec "nim c -r -d:release --threads:on tests/all_tests"
-  exec "nim c -r -d:danger  --threads:on tests/all_tests"
+### Helper functions
+proc test(env, path: string) =
+  # Compilation language is controlled by TEST_LANG
+  var lang = "c"
+  if existsEnv"TEST_LANG":
+    lang = getEnv"TEST_LANG"
 
+  exec "nim " & lang & " " & env &
+    " -r --hints:off --warnings:off " & path
+
+task test, "Run all tests":
+  test "-d:debug   --threads:on", "tests/all_tests"
+  test "-d:release --threads:on", "tests/all_tests"
+  test "-d:danger  --threads:on", "tests/all_tests"
