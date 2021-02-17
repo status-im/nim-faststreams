@@ -164,3 +164,21 @@ procSuite "input stream":
     check:
       (stream.read(4) == "1234".toOpenArrayByte(0, 3))
 
+  template posTest(name: string, setup: untyped) =
+    test name:
+      setup
+      check input.readable
+      check input.pos == 0
+      discard input.read
+      check input.pos == 1
+      close input
+
+  posTest "unsafeMemoryInput pos":
+    var str = "hello"
+    var input = unsafeMemoryInput(str)
+
+  posTest "fileInput pos":
+    var input = fileInput(asciiTableFile)
+
+  posTest "memFileInput pos":
+    var input = memFileInput(asciiTableFile)
