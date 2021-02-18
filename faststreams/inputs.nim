@@ -205,7 +205,7 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
       span: PageSpan(
         startAddr: head,
         endAddr: offset(head, mappedSize)),
-      spanEndPos: distance(head, offset(head, mappedSize)),
+      spanEndPos: mappedSize,
       file: memFile)
   except OSError as err:
     raise newException(IOError, err.msg, err)
