@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  os, unittest, strutils, random,
+  os, unittest2, strutils, random,
   stew/ranges/ptr_arith, testutils,
   ../faststreams, ../faststreams/textio
 

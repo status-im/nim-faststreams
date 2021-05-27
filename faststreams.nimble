@@ -10,7 +10,8 @@ skipDirs      = @["tests"]
 requires "nim >= 1.2.0",
          "stew",
          "testutils",
-         "chronos"
+         "chronos",
+         "unittest2"
 
 ### Helper functions
 proc test(env, path: string) =
@@ -20,7 +21,7 @@ proc test(env, path: string) =
     lang = getEnv"TEST_LANG"
 
   exec "nim " & lang & " " & env &
-    " -r --hints:off --warnings:off " & path
+    " -r --hints:off --skipParentCfg " & path
 
 task test, "Run all tests":
   test "-d:debug   --threads:on", "tests/all_tests"
