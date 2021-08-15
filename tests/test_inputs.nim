@@ -2,14 +2,10 @@
 
 import
   os, unittest2, strutils, random,
-  stew/ranges/ptr_arith, testutils,
+  testutils,
   ../faststreams, ../faststreams/textio
 
 setCurrentDir getAppDir()
-
-proc bytes(s: string): seq[byte] =
-  result = newSeqOfCap[byte](s.len)
-  for c in s: result.add byte(c)
 
 proc str(bytes: openarray[byte]): string =
   result = newStringOfCap(bytes.len)
@@ -28,7 +24,7 @@ const
   asciiTableFile = "files" / "ascii_table.txt"
   asciiTableContents = slurp(asciiTableFile)
 
-procSuite "input stream":
+suite "input stream":
   template emptyInputTests(suiteName, setupCode: untyped) =
     suite suiteName & " empty inputs":
       setup setupCode

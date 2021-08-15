@@ -154,6 +154,15 @@ suite "output stream":
 
     checkOutputsMatch()
 
+  test "memcpy":
+    var x = 0x42'u8
+
+    nimSeq.add x
+    memStream.writeMemCopy x
+    let memStreamRes = memStream.getOutput
+
+    check memStreamRes == nimSeq
+
   template undelayedOutput(content: seq[byte]) {.dirty.} =
     nimSeq.add content
     streamWritingToExistingBuffer.write content

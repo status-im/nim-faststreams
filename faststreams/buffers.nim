@@ -22,8 +22,9 @@ type
     maxBufferedBytes*: Natural
 
     queue*: Deque[PageRef]
-    waitingReader*: Future[void]
-    waitingWriter*: Future[void]
+    when fsAsyncSupport:
+      waitingReader*: Future[void]
+      waitingWriter*: Future[void]
 
     eofReached*: bool
     fauxEofPos*: Natural
