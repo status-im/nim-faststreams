@@ -14,17 +14,78 @@ import
 export
   initPageBuffers, CloseBehavior
 
-type
-  OutputStream* = ref object of RootObj
-    vtable*: ptr OutputStreamVTable # This is nil for any memory output
-    buffers*: PageBuffers           # This is nil for unsafe memory outputs
-    span*: PageSpan
-    spanEndPos*: Natural
-    extCursorsCount: int
-    closeFut: Future[void]          # This is nil before `close` is called
-    when debugHelpers:
-      name*: string
+when fsAsyncSupport:
+  # Circular type refs prevent more targeted `when`
+  type
+    OutputStream* = ref object of RootObj
+      vtable*: ptr OutputStreamVTable # This is nil for any memory output
+      buffers*: PageBuffers           # This is nil for unsafe memory outputs
+      span*: PageSpan
+      spanEndPos*: Natural
+      extCursorsCount: int
+      closeFut: Future[void]          # This is nil before `close` is called
+      when debugHelpers:
+        name*: string
 
+    AsyncOutputStream* {.borrow: `.`.} = distinct OutputStream
+
+    WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    WriteAsyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    FlushSyncProc* = proc (s: OutputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    FlushAsyncProc* = proc (s: OutputStream): Future[void]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    CloseSyncProc* = proc (s: OutputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    CloseAsyncProc* = proc (s: OutputStream): Future[void]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    OutputStreamVTable* = object
+      writeSync*: WriteSyncProc
+      writeAsync*: WriteAsyncProc
+      flushSync*: FlushSyncProc
+      flushAsync*: FlushAsyncProc
+      closeSync*: CloseSyncProc
+      closeAsync*: CloseAsyncProc
+
+    MaybeAsyncOutputStream* = OutputStream | AsyncOutputStream
+
+else:
+  type
+    OutputStream* = ref object of RootObj
+      vtable*: ptr OutputStreamVTable # This is nil for any memory output
+      buffers*: PageBuffers           # This is nil for unsafe memory outputs
+      span*: PageSpan
+      spanEndPos*: Natural
+      extCursorsCount: int
+      when debugHelpers:
+        name*: string
+
+
+    WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    FlushSyncProc* = proc (s: OutputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    CloseSyncProc* = proc (s: OutputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    OutputStreamVTable* = object
+      writeSync*: WriteSyncProc
+      flushSync*: FlushSyncProc
+      closeSync*: CloseSyncProc
+
+    MaybeAsyncOutputStream* = OutputStream
+
+type
   WriteCursor* = object
     span: PageSpan
     stream: OutputStream
@@ -36,55 +97,35 @@ type
   OutputStreamHandle* = object
     s*: OutputStream
 
-  AsyncOutputStream* {.borrow: `.`.} = distinct OutputStream
-
-  WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural)
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  WriteAsyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                         {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  FlushSyncProc* = proc (s: OutputStream)
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  FlushAsyncProc* = proc (s: OutputStream): Future[void]
-                         {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  CloseSyncProc* = proc (s: OutputStream)
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  CloseAsyncProc* = proc (s: OutputStream): Future[void]
-                         {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  OutputStreamVTable* = object
-    writeSync*: WriteSyncProc
-    writeAsync*: WriteAsyncProc
-    flushSync*: FlushSyncProc
-    flushAsync*: FlushAsyncProc
-    closeSync*: CloseSyncProc
-    closeAsync*: CloseAsyncProc
-
   VarSizeWriteCursor* = distinct WriteCursor
 
   FileOutputStream = ref object of OutputStream
     file: File
 
 template Sync*(s: OutputStream): OutputStream = s
-template Async*(s: OutputStream): AsyncOutputStream = AsyncOutputStream(s)
 
-template Sync*(s: AsyncOutputStream): OutputStream = OutputStream(s)
-template Async*(s: AsyncOutputStream): AsyncOutputStream = s
+when fsAsyncSupport:
+  template Async*(s: OutputStream): AsyncOutputStream = AsyncOutputStream(s)
+
+  template Sync*(s: AsyncOutputStream): OutputStream = OutputStream(s)
+  template Async*(s: AsyncOutputStream): AsyncOutputStream = s
 
 proc disconnectOutputDevice(s: OutputStream) =
   if s.vtable != nil:
-    if s.vtable.closeAsync != nil:
-      s.closeFut = s.vtable.closeAsync(s)
-    elif s.vtable.closeSync != nil:
-      s.vtable.closeSync(s)
+    when fsAsyncSupport:
+      if s.vtable.closeAsync != nil:
+        s.closeFut = s.vtable.closeAsync(s)
+      elif s.vtable.closeSync != nil:
+        s.vtable.closeSync(s)
+    else:
+      if s.vtable.closeSync != nil:
+        s.vtable.closeSync(s)
+
     s.vtable = nil
 
-template disconnectOutputDevice(s: AsyncOutputStream) =
-  disconnectOutputDevice OutputStream(s)
+when fsAsyncSupport:
+  template disconnectOutputDevice(s: AsyncOutputStream) =
+    disconnectOutputDevice OutputStream(s)
 
 template flushImpl(s: OutputStream, awaiter, writeOp, flushOp: untyped) =
   fsAssert s.extCursorsCount == 0
@@ -99,36 +140,20 @@ template flushImpl(s: OutputStream, awaiter, writeOp, flushOp: untyped) =
 proc flush*(s: OutputStream) =
   flushImpl(s, noAwait, writeSync, flushSync)
 
-template flush*(sp: AsyncOutputStream) =
-  let s = OutputStream sp
-  flushImpl(s, fsAwait, writeAsync, flushAsync)
-
-proc flushAsync*(s: AsyncOutputStream) {.async.} =
-  flush s
-
 proc close*(s: OutputStream,
             behavior = dontWaitAsyncClose)
            {.raises: [IOError, Defect].} =
   flush s
   disconnectOutputDevice(s)
-  if s.closeFut != nil:
-    fsTranslateErrors "Stream closing failed":
-      if behavior == waitAsyncClose:
-        waitFor s.closeFut
-      else:
-        asyncCheck s.closeFut
+  when fsAsyncSupport:
+    if s.closeFut != nil:
+      fsTranslateErrors "Stream closing failed":
+        if behavior == waitAsyncClose:
+          waitFor s.closeFut
+        else:
+          asyncCheck s.closeFut
 
-template close*(sp: AsyncOutputStream) =
-  let s = OutputStream sp
-  flush(Async s)
-  disconnectOutputDevice(s)
-  if s.closeFut != nil:
-    fsAwait s.closeFut
-
-proc closeAsync*(s: AsyncOutputStream) {.async.} =
-  close s
-
-template closeNoWait*(sp: AsyncOutputStream|OutputStream) =
+template closeNoWait*(sp: MaybeAsyncOutputStream) =
   ## Close the stream without waiting even if's async.
   ## This operation will use `asyncCheck` internally to detect unhandled
   ## errors from the closing operation.
@@ -196,8 +221,9 @@ proc ensureRunway*(s: OutputStream, neededRunway: Natural) =
     s.buffers.ensureRunway(s.span, neededRunway)
     s.spanEndPos += (s.span.len - runway)
 
-template ensureRunway*(s: AsyncOutputStream, neededRunway: Natural) =
-  ensureRunway OutputStream(s), neededRunway
+when fsAsyncSupport:
+  template ensureRunway*(s: AsyncOutputStream, neededRunway: Natural) =
+    ensureRunway OutputStream(s), neededRunway
 
 template implementWrites*(buffersParam: PageBuffers,
                           srcParam: pointer,
@@ -266,8 +292,9 @@ proc fileOutput*(filename: string,
 proc pos*(s: OutputStream): int =
   s.spanEndPos - s.span.len
 
-template pos*(s: AsyncOutputStream): int =
-  pos OutputStream(s)
+when fsAsyncSupport:
+  template pos*(s: AsyncOutputStream): int =
+    pos OutputStream(s)
 
 proc getBuffers*(s: OutputStream): PageBuffers =
   fsAssert s.buffers != nil
@@ -313,10 +340,11 @@ proc drainAllBuffersSync(s: OutputStream, buf: pointer, bufSize: Natural) =
     s.span = s.buffers.getWritableSpan()
     s.spanEndPos += s.span.len
 
-proc drainAllBuffersAsync(s: OutputStream, buf: pointer, bufSize: Natural) {.async.} =
-  fsAwait s.vtable.writeAsync(s, buf, bufSize)
-  s.span = s.buffers.getWritableSpan()
-  s.spanEndPos += s.span.len
+when fsAsyncSupport:
+  proc drainAllBuffersAsync(s: OutputStream, buf: pointer, bufSize: Natural) {.async.} =
+    fsAwait s.vtable.writeAsync(s, buf, bufSize)
+    s.span = s.buffers.getWritableSpan()
+    s.spanEndPos += s.span.len
 
 proc createCursor(s: OutputStream, size: int): WriteCursor =
   inc s.extCursorsCount
@@ -533,21 +561,22 @@ template write*(sp: OutputStream, b: byte) =
   else:
     writeToNewSpan(s, b)
 
-proc write*(sp: AsyncOutputStream, b: byte) =
-  let s = OutputStream sp
-  if atEnd(s.span):
-    addPage(s)
-  writeByte(s.span, b)
-
-template writeAndWait*(sp: AsyncOutputStream, b: byte) =
-  let s = OutputStream sp
-  if hasRunway(s.span):
+when fsAsyncSupport:
+  proc write*(sp: AsyncOutputStream, b: byte) =
+    let s = OutputStream sp
+    if atEnd(s.span):
+      addPage(s)
     writeByte(s.span, b)
-  else:
-    writeToNewSpanImpl(s, b, fsAwait, writeAsync, drainAllBuffersAsync)
 
-template write*(s: AsyncOutputStream, x: char) =
-  write s, byte(x)
+  template writeAndWait*(sp: AsyncOutputStream, b: byte) =
+    let s = OutputStream sp
+    if hasRunway(s.span):
+      writeByte(s.span, b)
+    else:
+      writeToNewSpanImpl(s, b, fsAwait, writeAsync, drainAllBuffersAsync)
+
+  template write*(s: AsyncOutputStream, x: char) =
+    write s, byte(x)
 
 template write*(s: OutputStream|var WriteCursor, x: char) =
   bind write
@@ -606,7 +635,7 @@ proc write*(s: OutputStream, bytes: openArray[byte]) =
 proc write*(s: OutputStream, chars: openArray[char]) =
   write s, charsToBytes(chars)
 
-proc write*(s: OutputStream|AsyncOutputStream, value: string) {.inline.} =
+proc write*(s: MaybeAsyncOutputStream, value: string) {.inline.} =
   write s, value.toOpenArrayByte(0, value.len - 1)
 
 template memCopyToBytes(value: auto): untyped =
@@ -618,37 +647,39 @@ template memCopyToBytes(value: auto): untyped =
 proc writeMemCopy*(s: OutputStream, value: auto) =
   write s, memCopyToBytes(value)
 
-proc writeBytesAsyncImpl(sp: OutputStream,
-                         bytes: openarray[byte]): Future[void] =
-  let s = sp
-  writeBytesImpl(s, bytes):
-    return s.vtable.writeAsync(s, unsafeAddr bytes[0], bytes.len)
+when fsAsyncSupport:
+  proc writeBytesAsyncImpl(sp: OutputStream,
+                          bytes: openarray[byte]): Future[void] =
+    let s = sp
+    writeBytesImpl(s, bytes):
+      return s.vtable.writeAsync(s, unsafeAddr bytes[0], bytes.len)
 
-proc writeBytesAsyncImpl(s: OutputStream,
-                         chars: openarray[char]): Future[void] =
-  writeBytesAsyncImpl s, charsToBytes(chars)
+  proc writeBytesAsyncImpl(s: OutputStream,
+                          chars: openarray[char]): Future[void] =
+    writeBytesAsyncImpl s, charsToBytes(chars)
 
-proc writeBytesAsyncImpl(s: OutputStream,
-                         str: string): Future[void] =
-  writeBytesAsyncImpl s, toOpenArray(str, 0, str.len - 1)
+  proc writeBytesAsyncImpl(s: OutputStream,
+                          str: string): Future[void] =
+    writeBytesAsyncImpl s, toOpenArray(str, 0, str.len - 1)
 
 template writeAndWait*(s: OutputStream, value: untyped) =
   write s, value
 
-template writeAndWait*(sp: AsyncOutputStream, value: untyped) =
-  bind writeBytesAsyncImpl
+when fsAsyncSupport:
+  template writeAndWait*(sp: AsyncOutputStream, value: untyped) =
+    bind writeBytesAsyncImpl
 
-  let
-    s = OutputStream sp
-    f = writeBytesAsyncImpl(s, value)
+    let
+      s = OutputStream sp
+      f = writeBytesAsyncImpl(s, value)
 
-  if f != nil:
-    fsAwait(f)
-    s.span = getWritableSpan s.buffers
-    s.spanEndPos += s.span.len
+    if f != nil:
+      fsAwait(f)
+      s.span = getWritableSpan s.buffers
+      s.spanEndPos += s.span.len
 
-template writeMemCopyAndWait*(sp: AsyncOutputStream, value: auto) =
-  writeAndWait(sp, memCopyToBytes(value))
+  template writeMemCopyAndWait*(sp: AsyncOutputStream, value: auto) =
+    writeAndWait(sp, memCopyToBytes(value))
 
 proc writeBytesToCursor(c: var WriteCursor, bytes: openarray[byte]) =
   var
@@ -795,9 +826,28 @@ template getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
 template getOutput*(s: OutputStream): seq[byte] =
   cast[seq[byte]](s.getOutput(string))
 
-template getOutput*(s: AsyncOutputStream): seq[byte] =
-  getOutput OutputStream(s)
+when fsAsyncSupport:
+  template getOutput*(s: AsyncOutputStream): seq[byte] =
+    getOutput OutputStream(s)
 
-template getOutput*(s: AsyncOutputStream, T: type): untyped =
-  getOutput OutputStream(s), T
+  template getOutput*(s: AsyncOutputStream, T: type): untyped =
+    getOutput OutputStream(s), T
+
+  when fsAsyncSupport:
+    template flush*(sp: AsyncOutputStream) =
+      let s = OutputStream sp
+      flushImpl(s, fsAwait, writeAsync, flushAsync)
+
+    proc flushAsync*(s: AsyncOutputStream) {.async.} =
+      flush s
+
+    template close*(sp: AsyncOutputStream) =
+      let s = OutputStream sp
+      flush(Async s)
+      disconnectOutputDevice(s)
+      if s.closeFut != nil:
+        fsAwait s.closeFut
+
+    proc closeAsync*(s: AsyncOutputStream) {.async.} =
+      close s
 

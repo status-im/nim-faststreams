@@ -6,46 +6,79 @@ import
 export
   options, CloseBehavior
 
-type
-  InputStream* = ref object of RootObj
-    vtable*: ptr InputStreamVTable # This is nil for unsafe memory inputs
-    buffers*: PageBuffers          # This is nil for unsafe memory inputs
-    span*: PageSpan
-    spanEndPos*: Natural
-    closeFut*: Future[void]        # This is nil before `close` is called
-    when debugHelpers:
-      name*: string
+when fsAsyncSupport:
+  # Circular type refs prevent more targeted `when`
+  type
+    InputStream* = ref object of RootObj
+      vtable*: ptr InputStreamVTable # This is nil for unsafe memory inputs
+      buffers*: PageBuffers          # This is nil for unsafe memory inputs
+      span*: PageSpan
+      spanEndPos*: Natural
+      closeFut*: Future[void]      # This is nil before `close` is called
+      when debugHelpers:
+        name*: string
 
+
+    AsyncInputStream* {.borrow: `.`.} = distinct InputStream
+
+    ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
+                        {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    ReadAsyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    CloseSyncProc* = proc (s: InputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    CloseAsyncProc* = proc (s: InputStream): Future[void]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    GetLenSyncProc* = proc (s: InputStream): Option[Natural]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    InputStreamVTable* = object
+      readSync*: ReadSyncProc
+      closeSync*: CloseSyncProc
+      getLenSync*: GetLenSyncProc
+      readAsync*: ReadAsyncProc
+      closeAsync*: CloseAsyncProc
+
+    MaybeAsyncInputStream* = InputStream | AsyncInputStream
+
+else:
+  type
+    InputStream* = ref object of RootObj
+      vtable*: ptr InputStreamVTable # This is nil for unsafe memory inputs
+      buffers*: PageBuffers          # This is nil for unsafe memory inputs
+      span*: PageSpan
+      spanEndPos*: Natural
+      when debugHelpers:
+        name*: string
+
+
+    ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
+                        {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    CloseSyncProc* = proc (s: InputStream)
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    GetLenSyncProc* = proc (s: InputStream): Option[Natural]
+                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+
+    InputStreamVTable* = object
+      readSync*: ReadSyncProc
+      closeSync*: CloseSyncProc
+      getLenSync*: GetLenSyncProc
+
+    MaybeAsyncInputStream* = InputStream
+
+type
   LayeredInputStream* = ref object of InputStream
     source*: InputStream
     allowWaitFor*: bool
 
   InputStreamHandle* = object
     s*: InputStream
-
-  AsyncInputStream* {.borrow: `.`.} = distinct InputStream
-
-  ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                       {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  ReadAsyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  CloseSyncProc* = proc (s: InputStream)
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  CloseAsyncProc* = proc (s: InputStream): Future[void]
-                         {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  GetLenSyncProc* = proc (s: InputStream): Option[Natural]
-                         {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-  InputStreamVTable* = object
-    readSync*: ReadSyncProc
-    readAsync*: ReadAsyncProc
-    closeSync*: CloseSyncProc
-    closeAsync*: CloseAsyncProc
-    getLenSync*: GetLenSyncProc
 
   MemFileInputStream = ref object of InputStream
     file: MemFile
@@ -54,30 +87,38 @@ type
     file: File
 
 template Sync*(s: InputStream): InputStream = s
-template Async*(s: InputStream): AsyncInputStream = AsyncInputStream(s)
 
-template Sync*(s: AsyncInputStream): InputStream = InputStream(s)
-template Async*(s: AsyncInputStream): AsyncInputStream = s
+when fsAsyncSupport:
+  template Async*(s: InputStream): AsyncInputStream = AsyncInputStream(s)
+
+  template Sync*(s: AsyncInputStream): InputStream = InputStream(s)
+  template Async*(s: AsyncInputStream): AsyncInputStream = s
 
 proc disconnectInputDevice(s: InputStream) =
   # TODO
   # Document the behavior that closeAsync is preferred
   if s.vtable != nil:
-    if s.vtable.closeAsync != nil:
-      s.closeFut = s.vtable.closeAsync(s)
-    elif s.vtable.closeSync != nil:
-      s.vtable.closeSync(s)
+    when fsAsyncSupport:
+      if s.vtable.closeAsync != nil:
+          s.closeFut = s.vtable.closeAsync(s)
+      elif s.vtable.closeSync != nil:
+        s.vtable.closeSync(s)
+    else:
+      if s.vtable.closeSync != nil:
+        s.vtable.closeSync(s)
     s.vtable = nil
 
-template disconnectInputDevice(s: AsyncInputStream) =
-  disconnectInputDevice InputStream(s)
+when fsAsyncSupport:
+  template disconnectInputDevice(s: AsyncInputStream) =
+    disconnectInputDevice InputStream(s)
 
 proc preventFurtherReading(s: InputStream) =
   s.vtable = nil
   s.span = default(PageSpan)
 
-template preventFurtherReading(s: AsyncInputStream) =
-  preventFurtherReading InputStream(s)
+when fsAsyncSupport:
+  template preventFurtherReading(s: AsyncInputStream) =
+    preventFurtherReading InputStream(s)
 
 template makeHandle*(sp: InputStream): InputStreamHandle =
   let s = sp
@@ -94,23 +135,25 @@ proc close*(s: InputStream,
   ## `waitFor` to block until the async operation completes.
   s.disconnectInputDevice()
   s.preventFurtherReading()
-  if s.closeFut != nil:
-    fsTranslateErrors "Stream closing failed":
-      if behavior == waitAsyncClose:
-        waitFor s.closeFut
-      else:
-        asyncCheck s.closeFut
+  when fsAsyncSupport:
+    if s.closeFut != nil:
+      fsTranslateErrors "Stream closing failed":
+        if behavior == waitAsyncClose:
+          waitFor s.closeFut
+        else:
+          asyncCheck s.closeFut
 
-template close*(sp: AsyncInputStream) =
-  ## Starts the asychronous closing of the stream and returns a future that
-  ## tracks the closing operation.
-  let s = InputStream sp
-  disconnectInputDevice(s)
-  preventFurtherReading(s)
-  if s.closeFut != nil:
-    fsAwait s.closeFut
+when fsAsyncSupport:
+  template close*(sp: AsyncInputStream) =
+    ## Starts the asychronous closing of the stream and returns a future that
+    ## tracks the closing operation.
+    let s = InputStream sp
+    disconnectInputDevice(s)
+    preventFurtherReading(s)
+    if s.closeFut != nil:
+      fsAwait s.closeFut
 
-template closeNoWait*(sp: AsyncInputStream|InputStream) =
+template closeNoWait*(sp: MaybeAsyncInputStream) =
   ## Close the stream without waiting even if's async.
   ## This operation will use `asyncCheck` internally to detect unhandled
   ## errors from the closing operation.
@@ -224,56 +267,52 @@ proc readableNow*(s: InputStream): bool =
   getNewSpan s
   s.span.hasRunway
 
-template readableNow*(s: AsyncInputStream): bool =
-  readableNow InputStream(s)
+when fsAsyncSupport:
+  template readableNow*(s: AsyncInputStream): bool =
+    readableNow InputStream(s)
 
-# TODO: The pure async interface should be moved in a separate module
-#       to make FastStreams more light-weight when the async back-end
-#       is not used (e.g. in Confutils)
-#
-#       The problem is that the `async` macro will pull the entire
-#       event loop right now.
+  proc readOnce*(sp: AsyncInputStream): Future[Natural] {.async.} =
+    let s = InputStream(sp)
+    fsAssert s.buffers != nil and s.vtable != nil
 
-proc readOnce*(sp: AsyncInputStream): Future[Natural] {.async.} =
-  let s = InputStream(sp)
-  fsAssert s.buffers != nil and s.vtable != nil
+    result = fsAwait s.vtable.readAsync(s, nil, 0)
 
-  result = fsAwait s.vtable.readAsync(s, nil, 0)
+    if s.buffers.eofReached:
+      disconnectInputDevice(s)
 
-  if s.buffers.eofReached:
-    disconnectInputDevice(s)
+    if result > 0 and s.span.len == 0:
+      getNewSpan s
 
-  if result > 0 and s.span.len == 0:
-    getNewSpan s
+  proc timeoutToNextByteImpl(s: AsyncInputStream,
+                            deadline: Future): Future[bool] {.async.} =
+    let readFut = s.readOnce
+    fsAwait readFut or deadline
+    if not readFut.finished:
+      readFut.cancel()
+      return true
+    else:
+      return false
 
-proc timeoutToNextByteImpl(s: AsyncInputStream,
-                           deadline: Future): Future[bool] {.async.} =
-  let readFut = s.readOnce
-  fsAwait readFut or deadline
-  if not readFut.finished:
-    readFut.cancel()
-    return true
-  else:
-    return false
+  template timeoutToNextByte*(sp: AsyncInputStream, deadline: Future): bool =
+    let s = sp
+    if readableNow(s):
+      true
+    else:
+      fsAwait timeoutToNextByteImpl(s, deadline)
 
-template timeoutToNextByte*(sp: AsyncInputStream, deadline: Future): bool =
-  let s = sp
-  if readableNow(s):
-    true
-  else:
-    fsAwait timeoutToNextByteImpl(s, deadline)
+  template timeoutToNextByte*(sp: AsyncInputStream, timeout: Duration): bool =
+    let s = sp
+    if readableNow(s):
+      true
+    else:
+      fsAwait timeoutToNextByteImpl(s, sleepAsync(timeout))
 
-template timeoutToNextByte*(sp: AsyncInputStream, timeout: Duration): bool =
-  let s = sp
-  if readableNow(s):
-    true
-  else:
-    fsAwait timeoutToNextByteImpl(s, sleepAsync(timeout))
+  proc closeAsync*(s: AsyncInputStream) {.async.} =
+    close s
 
-proc closeAsync*(s: AsyncInputStream) {.async.} =
-  close s
-
-# TODO: End of purely async interface
+  template totalUnconsumedBytes*(s: AsyncInputStream): Natural =
+    ## Alias for InputStream.totalUnconsumedBytes
+    totalUnconsumedBytes InputStream(s)
 
 func getBestContiguousRunway(s: InputStream): Natural =
   result = s.span.len
@@ -298,10 +337,6 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
 
   localRunway + runwayInBuffers
 
-template totalUnconsumedBytes*(s: AsyncInputStream): Natural =
-  ## Alias for InputStream.totalUnconsumedBytes
-  totalUnconsumedBytes InputStream(s)
-
 proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
   s.vtable = nil
 
@@ -317,7 +352,7 @@ proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
       s.buffers.queue.peekFirst.consumedTo -= bytesToUnconsume
       return s.buffers.setFauxEof(s.spanEndPos)
 
-template withReadableRange*(sp: InputStream|AsyncInputStream,
+template withReadableRange*(sp: MaybeAsyncInputStream,
                             rangeLen: Natural,
                             rangeStreamVarName, blk: untyped) =
   let
@@ -409,8 +444,9 @@ proc len*(s: InputStream): Option[Natural] {.raises: [Defect, IOError].} =
   else:
     none Natural
 
-template len*(s: AsyncInputStream): Option[Natural] =
-  len InputStream(s)
+when fsAsyncSupport:
+  template len*(s: AsyncInputStream): Option[Natural] =
+    len InputStream(s)
 
 func memoryInput*(buffers: PageBuffers): InputStreamHandle =
   var spanEndPos = Natural 0
@@ -541,15 +577,16 @@ template readable*(sp: InputStream): bool =
   let s = sp
   hasRunway(s.span) or bufferMoreDataSync(s)
 
-template readable*(sp: AsyncInputStream): bool =
-  ## Async version of `readable`.
-  ## The intended API usage is the same. Instead of blocking, an async
-  ## stream will use `await` while waiting for more data.
-  let s = InputStream sp
-  if hasRunway(s.span):
-    true
-  else:
-    bufferMoreDataImpl(s, fsAwait, readAsync)
+when fsAsyncSupport:
+  template readable*(sp: AsyncInputStream): bool =
+    ## Async version of `readable`.
+    ## The intended API usage is the same. Instead of blocking, an async
+    ## stream will use `await` while waiting for more data.
+    let s = InputStream sp
+    if hasRunway(s.span):
+      true
+    else:
+      bufferMoreDataImpl(s, fsAwait, readAsync)
 
 func continueAfterReadN(s: InputStream,
                         runwayBeforeRead, bytesRead: Natural) =
@@ -615,15 +652,16 @@ proc readable*(s: InputStream, n: int): bool =
   ## for futher discussion of this.
   readableNImpl(s, n, noAwait, readSync)
 
-template readable*(sp: AsyncInputStream, np: int): bool =
-  ## Async version of `readable(n)`.
-  ## The intended API usage is the same. Instead of blocking, an async
-  ## stream will use `await` while waiting for more data.
-  let
-    s = InputStream sp
-    n = np
+when fsAsyncSupport:
+  template readable*(sp: AsyncInputStream, np: int): bool =
+    ## Async version of `readable(n)`.
+    ## The intended API usage is the same. Instead of blocking, an async
+    ## stream will use `await` while waiting for more data.
+    let
+      s = InputStream sp
+      n = np
 
-  readableNImpl(s, n, fsAwait, readAsync)
+    readableNImpl(s, n, fsAwait, readAsync)
 
 template peek*(sp: InputStream): byte =
   let s = sp
@@ -633,8 +671,9 @@ template peek*(sp: InputStream): byte =
     getNewSpanOrDieTrying s
     s.span.startAddr[]
 
-template peek*(s: AsyncInputStream): byte =
-  peek InputStream(s)
+when fsAsyncSupport:
+  template peek*(s: AsyncInputStream): byte =
+    peek InputStream(s)
 
 func readFromNewSpan(s: InputStream): byte =
   getNewSpanOrDieTrying s
@@ -650,8 +689,9 @@ template read*(sp: InputStream): byte =
   else:
     readFromNewSpan s
 
-template read*(s: AsyncInputStream): byte =
-  read InputStream(s)
+when fsAsyncSupport:
+  template read*(s: AsyncInputStream): byte =
+    read InputStream(s)
 
 proc peekAt*(s: InputStream, pos: int): byte {.inline.} =
   # TODO implement page flipping
@@ -659,8 +699,9 @@ proc peekAt*(s: InputStream, pos: int): byte {.inline.} =
   fsAssert cast[uint](peekHead) < cast[uint](s.span.endAddr)
   return peekHead[]
 
-template peekAt*(s: AsyncInputStream, pos: int): byte =
-  peekAt InputStream(s), pos
+when fsAsyncSupport:
+  template peekAt*(s: AsyncInputStream, pos: int): byte =
+    peekAt InputStream(s), pos
 
 proc advance*(s: InputStream) =
   if hasRunway(s.span):
@@ -673,11 +714,12 @@ proc advance*(s: InputStream, n: Natural) =
   for i in 0 ..< n:
     advance s
 
-template advance*(s: AsyncInputStream) =
-  advance InputStream(s)
+when fsAsyncSupport:
+  template advance*(s: AsyncInputStream) =
+    advance InputStream(s)
 
-template advance*(s: AsyncInputStream, n: Natural) =
-  advance InputStream(s), n
+  template advance*(s: AsyncInputStream, n: Natural) =
+    advance InputStream(s), n
 
 proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natural =
   var
@@ -789,29 +831,30 @@ proc readInto*(s: InputStream, target: var openarray[byte]): bool =
   ## regarding the number of bytes read, see `readIntoEx`.
   s.readIntoEx(target) == target.len
 
-template readIntoEx*(sp: AsyncInputStream, dst: var openarray[byte]): int =
-  let s = InputStream(sp)
-  # BEWARE! `openArrayToPair` here is needed to avoid
-  # double evaluation of the `dst` expression:
-  let (dstAddr, dstLen) = openArrayToPair(dst)
-  readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync)
+when fsAsyncSupport:
+  template readIntoEx*(sp: AsyncInputStream, dst: var openarray[byte]): int =
+    let s = InputStream(sp)
+    # BEWARE! `openArrayToPair` here is needed to avoid
+    # double evaluation of the `dst` expression:
+    let (dstAddr, dstLen) = openArrayToPair(dst)
+    readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync)
 
-template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
-  ## Asynchronously read data into the destination buffer.
-  ##
-  ## Returns `false` if EOF was reached before the buffer
-  ## was fully populated. if you need precise information
-  ## regarding the number of bytes read, see `readIntoEx`.
-  ##
-  ## If there are enough bytes already buffered by the stream,
-  ## the expression will complete immediately.
-  ## Otherwise, it will await more bytes to become available.
+  template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
+    ## Asynchronously read data into the destination buffer.
+    ##
+    ## Returns `false` if EOF was reached before the buffer
+    ## was fully populated. if you need precise information
+    ## regarding the number of bytes read, see `readIntoEx`.
+    ##
+    ## If there are enough bytes already buffered by the stream,
+    ## the expression will complete immediately.
+    ## Otherwise, it will await more bytes to become available.
 
-  let s = InputStream(sp)
-  # BEWARE! `openArrayToPair` here is needed to avoid
-  # double evaluation of the `dst` expression:
-  let (dstAddr, dstLen) = openArrayToPair(dst)
-  readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync) == dstLen
+    let s = InputStream(sp)
+    # BEWARE! `openArrayToPair` here is needed to avoid
+    # double evaluation of the `dst` expression:
+    let (dstAddr, dstLen) = openArrayToPair(dst)
+    readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync) == dstLen
 
 template useHeapMem(_: Natural) =
   var buffer: seq[byte]
@@ -869,8 +912,9 @@ template read*(sp: InputStream, np: static Natural): openarray[byte] =
 template read*(s: InputStream, n: Natural): openarray[byte] =
   readNImpl(s, n, useHeapMem)
 
-template read*(s: AsyncInputStream, n: Natural): openarray[byte] =
-  read InputStream(s), n
+when fsAsyncSupport:
+  template read*(s: AsyncInputStream, n: Natural): openarray[byte] =
+    read InputStream(s), n
 
 proc lookAheadMatch*(s: InputStream, data: openarray[byte]): bool =
   for i in 0 ..< data.len:
@@ -879,23 +923,26 @@ proc lookAheadMatch*(s: InputStream, data: openarray[byte]): bool =
 
   return true
 
-template lookAheadMatch*(s: AsyncInputStream, data: openarray[byte]): bool =
-  lookAheadMatch InputStream(s)
+when fsAsyncSupport:
+  template lookAheadMatch*(s: AsyncInputStream, data: openarray[byte]): bool =
+    lookAheadMatch InputStream(s)
 
 proc next*(s: InputStream): Option[byte] =
   if readable(s):
     result = some read(s)
 
-template next*(sp: AsyncInputStream): Option[byte] =
-  let s = sp
-  if readable(s):
-    some read(s)
-  else:
-    none byte
+when fsAsyncSupport:
+  template next*(sp: AsyncInputStream): Option[byte] =
+    let s = sp
+    if readable(s):
+      some read(s)
+    else:
+      none byte
 
 proc pos*(s: InputStream): int {.inline.} =
   s.spanEndPos - s.span.len
 
-template pos*(s: AsyncInputStream): int =
-  pos InputStream(s)
+when fsAsyncSupport:
+  template pos*(s: AsyncInputStream): int =
+    pos InputStream(s)
 

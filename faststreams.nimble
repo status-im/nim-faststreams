@@ -1,7 +1,7 @@
 mode = ScriptMode.Verbose
 
 packageName   = "faststreams"
-version       = "0.2.0"
+version       = "0.3.0"
 author        = "Status Research & Development GmbH"
 description   = "Nearly zero-overhead input/output streams for Nim"
 license       = "Apache License 2.0"
@@ -21,7 +21,12 @@ proc test(env, path: string) =
     lang = getEnv"TEST_LANG"
 
   exec "nim " & lang & " " & env &
-    " -r --hints:off --skipParentCfg " & path
+    " -d:async_backend=none -r --hints:off --skipParentCfg " & path
+  exec "nim " & lang & " " & env &
+    " -d:async_backend=chronos -r --hints:off --skipParentCfg " & path
+  # TODO std backend is broken / untested
+  # exec "nim " & lang & " " & env &
+  #  " -d:async_backend=chronos -r --hints:off --skipParentCfg " & path
 
 task test, "Run all tests":
   test "-d:debug   --threads:on", "tests/all_tests"
