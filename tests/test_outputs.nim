@@ -9,6 +9,9 @@ proc bytes(s: string): seq[byte] =
   result = newSeqOfCap[byte](s.len)
   for c in s: result.add byte(c)
 
+proc bytes(s: cstring): seq[byte] =
+  for c in s: result.add byte(c)
+
 template bytes(c: char): byte = byte(c)
 template bytes(b: seq[byte]): seq[byte] = b
 template bytes[N, T](b: array[N, T]): seq[byte] = @b
@@ -58,14 +61,11 @@ suite "output stream":
 
   template output(val: auto) {.dirty.} =
     nimSeq.add bytes(val)
-
     memStream.write val
     smallPageSizeStream.write val
     largePageSizeStream.write val
-
     fileStream.write val
     unbufferedFileStream.write val
-
     streamWritingToExistingBuffer.write val
 
   template outputText(val: auto) =
@@ -151,6 +151,15 @@ suite "output stream":
       outputText i
       outputText " bottles on the wall"
       outputText '\n'
+
+    checkOutputsMatch()
+
+  test "cstrings":
+    for i in 1 .. 100:
+      output cstring("cstring sent by output ")
+      output cstring("")
+      outputText cstring("cstring sent by outputText ")
+      outputText cstring("")
 
     checkOutputsMatch()
 

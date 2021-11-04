@@ -524,23 +524,22 @@ proc tryMovingToNextPage(c: var WriteCursor) =
   fsAssert false, "Attempt to write past the end of a cursor"
 
 template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp: untyped) =
-  # Unsafe memory outputs don't use pages at all, so if our cursor
-  # reached here, this is a range violation defect:
-  fsAssert canExtendOutput(s)
-
-  if s.vtable == nil or s.extCursorsCount > 0:
+  if s.buffers == nil:
+    fsAssert s.vtable != nil # This is an unsafe memory output and we've reached
+                             # the end of the buffer which is range violation defect
+    fsAssert s.vtable.writeOp != nil
+    awaiter s.vtable.writeOp(s, unsafeAddr b, 1)
+  elif s.vtable == nil or s.extCursorsCount > 0:
     # This is the main cursor of a stream, but we are either not
     # ready to flush due to outstanding delayed writes or this is
     # just a memory output stream. In both cases, we just need to
     # allocate more memory and continue writing:
     addPage(s)
-  elif s.buffers == nil:
-    awaiter s.vtable.writeOp(nil, unsafeAddr b, 1)
+    writeByte(s.span, b)
   else:
     trackWrittenToEnd(s.buffers)
     awaiter drainOp(s, nil, 0)
-
-  writeByte(s.span, b)
+    writeByte(s.span, b)
 
 proc write*(c: var WriteCursor, b: byte) =
   if atEnd(c.span):
@@ -637,6 +636,10 @@ proc write*(s: OutputStream, chars: openArray[char]) =
 
 proc write*(s: MaybeAsyncOutputStream, value: string) {.inline.} =
   write s, value.toOpenArrayByte(0, value.len - 1)
+
+proc write*(s: OutputStream, value: cstring) =
+  for c in value:
+    write s, c
 
 template memCopyToBytes(value: auto): untyped =
   type T = type(value)
