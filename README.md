@@ -517,9 +517,9 @@ type PipelineResultProc*[T] = proc (i: InputStream): T
 
 Please note that `stream.getOutput` is an example of such a function.
 
-Pipelnes can be created with the `cretePipeline` API or executed in place with
-`executePipeline`. If the first input source is async, then the whole pipeline
-with be executing asynchronously which can result in a much lower memory usage.
+Pipelnes executed in place with `executePipeline` API. If the first input source is
+async, then the whole pipeline with be executing asynchronously which can result
+in a much lower memory usage.
 
 The pipeline transformation steps are usually employing the `fsMultiSync`
 pragma to make them usable in both synchronous and asynchronous scenarios.
