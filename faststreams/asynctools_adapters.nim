@@ -1,6 +1,9 @@
 import
   asynctools/asyncpipe,
-  inputs, outputs, buffers, multisync
+  inputs, outputs, buffers, multisync, async_backend
+
+when (not fsAsyncSupport):
+  {.fatal: "`-d:async_backend` has be to set".}
 
 export
   inputs, outputs, asyncpipe, fsMultiSync
