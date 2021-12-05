@@ -649,13 +649,13 @@ proc writeMemCopy*(s: OutputStream, value: auto) =
 
 when fsAsyncSupport:
   proc writeBytesAsyncImpl(sp: OutputStream,
-                          bytes: openarray[byte]): Future[void] =
+                          bytes: openArray[byte]): Future[void] =
     let s = sp
     writeBytesImpl(s, bytes):
       return s.vtable.writeAsync(s, unsafeAddr bytes[0], bytes.len)
 
   proc writeBytesAsyncImpl(s: OutputStream,
-                          chars: openarray[char]): Future[void] =
+                          chars: openArray[char]): Future[void] =
     writeBytesAsyncImpl s, charsToBytes(chars)
 
   proc writeBytesAsyncImpl(s: OutputStream,
@@ -681,7 +681,7 @@ when fsAsyncSupport:
   template writeMemCopyAndWait*(sp: AsyncOutputStream, value: auto) =
     writeAndWait(sp, memCopyToBytes(value))
 
-proc writeBytesToCursor(c: var WriteCursor, bytes: openarray[byte]) =
+proc writeBytesToCursor(c: var WriteCursor, bytes: openArray[byte]) =
   var
     runway = c.span.len
     inputPos = unsafeAddr bytes[0]
@@ -710,11 +710,11 @@ proc writeBytesToCursor(c: var WriteCursor, bytes: openarray[byte]) =
     copyMem(c.span.startAddr, inputPos, inputLen)
     c.span.startAddr = offset(c.span.startAddr, inputLen)
 
-template write*(c: var WriteCursor, bytes: openarray[byte]) =
+template write*(c: var WriteCursor, bytes: openArray[byte]) =
   bind writeBytesToCursor
   writeBytesToCursor(c, bytes)
 
-proc write*(c: var WriteCursor, chars: openarray[char]) {.inline.} =
+proc write*(c: var WriteCursor, chars: openArray[char]) {.inline.} =
   var charsStart = unsafeAddr chars[0]
   writeBytesToCursor(c, makeOpenArray(cast[ptr byte](charsStart), chars.len))
 
@@ -746,7 +746,7 @@ template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ##
   ## Before consuming the outputs, all outstanding delayed writes must
   ## be finalized.
-  proc consumer(bytesVar: openarray[byte]) {.gcsafe, raises: [Defect].} =
+  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [Defect].} =
     body
 
   consumeOutputsImpl(s, consumer)
@@ -792,7 +792,7 @@ template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   ## Before consuming the output, all outstanding delayed writes must
   ## be finalized.
   ##
-  proc consumer(bytesVar: openarray[byte]) {.gcsafe, raises: [Defect].} =
+  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [Defect].} =
     body
 
   consumeContiguousOutputImpl(s, consumer)

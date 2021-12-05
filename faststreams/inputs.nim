@@ -424,7 +424,7 @@ proc fileInput*(filename: string,
     buffers: initPageBuffers(pageSize),
     file: file)
 
-proc unsafeMemoryInput*(mem: openarray[byte]): InputStreamHandle =
+proc unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
   let head = unsafeAddr mem[0]
 
   makeHandle InputStream(
@@ -457,7 +457,7 @@ func memoryInput*(buffers: PageBuffers): InputStreamHandle =
                          span: span,
                          spanEndPos: spanEndPos)
 
-func memoryInput*(data: openarray[byte]): InputStreamHandle =
+func memoryInput*(data: openArray[byte]): InputStreamHandle =
   let stream = if data.len > 0:
     let
       buffers = initPageBuffers(data.len)
@@ -474,7 +474,7 @@ func memoryInput*(data: openarray[byte]): InputStreamHandle =
 
   makeHandle stream
 
-func memoryInput*(data: openarray[char]): InputStreamHandle =
+func memoryInput*(data: openArray[char]): InputStreamHandle =
   memoryInput charsToBytes(data)
 
 proc resetBuffers*(s: InputStream, buffers: PageBuffers) =
@@ -812,7 +812,7 @@ template readIntoExImpl(s: InputStream,
 
   dstLen - bytesDeficit
 
-proc readIntoEx*(s: InputStream, dst: var openarray[byte]): int =
+proc readIntoEx*(s: InputStream, dst: var openArray[byte]): int =
   ## Read data into the destination buffer.
   ##
   ## Returns the number of bytes that were successfully
@@ -823,7 +823,7 @@ proc readIntoEx*(s: InputStream, dst: var openarray[byte]): int =
   let dstLen = dst.len
   readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
 
-proc readInto*(s: InputStream, target: var openarray[byte]): bool =
+proc readInto*(s: InputStream, target: var openArray[byte]): bool =
   ## Read data into the destination buffer.
   ##
   ## Returns `false` if EOF was reached before the buffer
@@ -832,14 +832,14 @@ proc readInto*(s: InputStream, target: var openarray[byte]): bool =
   s.readIntoEx(target) == target.len
 
 when fsAsyncSupport:
-  template readIntoEx*(sp: AsyncInputStream, dst: var openarray[byte]): int =
+  template readIntoEx*(sp: AsyncInputStream, dst: var openArray[byte]): int =
     let s = InputStream(sp)
     # BEWARE! `openArrayToPair` here is needed to avoid
     # double evaluation of the `dst` expression:
     let (dstAddr, dstLen) = openArrayToPair(dst)
     readIntoExImpl(s, dstAddr, dstLen, fsAwait, readAsync)
 
-  template readInto*(sp: AsyncInputStream, dst: var openarray[byte]): bool =
+  template readInto*(sp: AsyncInputStream, dst: var openArray[byte]): bool =
     ## Asynchronously read data into the destination buffer.
     ##
     ## Returns `false` if EOF was reached before the buffer
@@ -871,7 +871,7 @@ template useStackMem(n: static Natural) =
 
 template readNImpl(sp: InputStream,
                    np: Natural,
-                   createAllocMemOp: untyped): openarray[byte] =
+                   createAllocMemOp: untyped): openArray[byte] =
   let
     s = sp
     n = np
@@ -881,7 +881,7 @@ template readNImpl(sp: InputStream,
   # to appear in different branches of an if statement, the code must
   # be written in this branch-free linear fashion. The `dataCopy` seq
   # may remain empty in the case where we use stack memory or return
-  # an `openarray` from the existing span.
+  # an `openArray` from the existing span.
   var startAddr: ptr byte
 
   block:
@@ -902,21 +902,21 @@ template readNImpl(sp: InputStream,
 
   makeOpenArray(startAddr, n)
 
-template read*(sp: InputStream, np: static Natural): openarray[byte] =
+template read*(sp: InputStream, np: static Natural): openArray[byte] =
   const n = np
   when n < maxStackUsage:
     readNImpl(sp, n, useStackMem)
   else:
     readNImpl(sp, n, useHeapMem)
 
-template read*(s: InputStream, n: Natural): openarray[byte] =
+template read*(s: InputStream, n: Natural): openArray[byte] =
   readNImpl(s, n, useHeapMem)
 
 when fsAsyncSupport:
-  template read*(s: AsyncInputStream, n: Natural): openarray[byte] =
+  template read*(s: AsyncInputStream, n: Natural): openArray[byte] =
     read InputStream(s), n
 
-proc lookAheadMatch*(s: InputStream, data: openarray[byte]): bool =
+proc lookAheadMatch*(s: InputStream, data: openArray[byte]): bool =
   for i in 0 ..< data.len:
     if s.peekAt(i) != data[i]:
       return false
@@ -924,7 +924,7 @@ proc lookAheadMatch*(s: InputStream, data: openarray[byte]): bool =
   return true
 
 when fsAsyncSupport:
-  template lookAheadMatch*(s: AsyncInputStream, data: openarray[byte]): bool =
+  template lookAheadMatch*(s: AsyncInputStream, data: openArray[byte]): bool =
     lookAheadMatch InputStream(s)
 
 proc next*(s: InputStream): Option[byte] =

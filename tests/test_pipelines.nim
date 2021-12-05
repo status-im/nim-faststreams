@@ -49,7 +49,7 @@ when fsAsyncSupport:
     let size = sp.totalUnconsumedBytes()
     if size > 0:
       var data = newSeq[byte](size)
-      discard sp.readinto(data)
+      discard sp.readInto(data)
       result = cast[string](data)
 
   suite "pipelines":
@@ -73,17 +73,17 @@ when fsAsyncSupport:
 
       let inputText = loremIpsum.repeat(5000)
 
-      timeIt times.stdFunctionCalls:
+      timeit times.stdFunctionCalls:
         stdRes = base64.decode(base64.encode(toUpperAscii(inputText)))
 
-      timeIt times.fsPipeline:
+      timeit times.fsPipeline:
         fsRes = executePipeline(unsafeMemoryInput(inputText),
                                 upcaseAllCharacters,
                                 base64encode,
                                 base64decode,
                                 getOutput string)
 
-      timeIt times.fsAsyncPipeline:
+      timeit times.fsAsyncPipeline:
         fsAsyncRes = waitFor executePipeline(Async unsafeMemoryInput(inputText),
                                             upcaseAllCharacters,
                                             base64encode,
@@ -130,7 +130,7 @@ when fsAsyncSupport:
 
       let fsAsyncres = await f
 
-      check fsAsyncRes == toUpperAscii(inputText)
+      check fsAsyncres == toUpperAscii(inputText)
 else:
   test "pipelines":
     skip
