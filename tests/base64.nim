@@ -78,7 +78,7 @@ proc base64decode*(i: InputStream, o: OutputStream) {.fsMultiSync.} =
   proc decodeSize(size: int): int =
     return (size * 3 div 4) + 6
 
-  proc raiseInvalidChar(c: byte, pos: int) {.noReturn.} =
+  proc raiseInvalidChar(c: byte, pos: int) {.noreturn.} =
     raise newException(ValueError,
       "Invalid base64 format character `" & char(c) & "` at location " & $pos & ".")
 

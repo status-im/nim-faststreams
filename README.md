@@ -34,7 +34,7 @@ in a way that allows the read and write operations to be handled without any
 dynamic dispatch in the majority of cases.
 
 In particular, reading from a `memoryInput` or writing to a `memoryOutput`
-will have similar performance to a loop iterating over an `openarray` or
+will have similar performance to a loop iterating over an `openArray` or
 another loop populating a pre-allocated `string`. `memFileInput` offers
 the same performance characteristics when working with files. The idiomatic
 use of the APIs with the rest of the stream types will result in a highly

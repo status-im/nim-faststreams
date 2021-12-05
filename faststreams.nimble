@@ -20,13 +20,15 @@ proc test(env, path: string) =
   if existsEnv"TEST_LANG":
     lang = getEnv"TEST_LANG"
 
+  let common_args = "-r -f --hints:off --skipParentCfg --styleCheck:usages --styleCheck:error"
+
   exec "nim " & lang & " " & env &
-    " -d:async_backend=none -r --hints:off --skipParentCfg " & path
+    " -d:async_backend=none " & common_args & " " & path
   exec "nim " & lang & " " & env &
-    " -d:async_backend=chronos -r --hints:off --skipParentCfg " & path
+    " -d:async_backend=chronos " & common_args & " " & path
   # TODO std backend is broken / untested
   # exec "nim " & lang & " " & env &
-  #  " -d:async_backend=chronos -r --hints:off --skipParentCfg " & path
+  #  " -d:async_backend=chronos " & common_args & " " & path
 
 task test, "Run all tests":
   test "-d:debug   --threads:on", "tests/all_tests"

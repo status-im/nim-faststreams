@@ -7,7 +7,7 @@ import
 
 setCurrentDir getAppDir()
 
-proc str(bytes: openarray[byte]): string =
+proc str(bytes: openArray[byte]): string =
   result = newStringOfCap(bytes.len)
   for b in items(bytes):
     result.add b.char

@@ -93,7 +93,7 @@ proc writeText*(s: OutputStream, x: CompiledIntTypes) =
     writeText(s, MatchingUInt(x))
 
 when defined(c):
-  
+
   proc writeText*(s: OutputStream, x: float64|float32|float) =
     ## Write the floating point number to the output stream. It has less overhead
     ## than `$` because it is directly written to the stream without
@@ -112,14 +112,14 @@ template writeText*(s: OutputStream, str: string) =
 template writeText*(s: OutputStream, val: auto) =
   write s, $val
 
-proc writeHex*(s: OutputStream, bytes: openarray[byte]) =
+proc writeHex*(s: OutputStream, bytes: openArray[byte]) =
   const hexChars = "0123456789abcdef"
 
   for b in bytes:
     s.write hexChars[int b shr 4 and 0xF]
     s.write hexChars[int b and 0xF]
 
-proc writeHex*(s: OutputStream, chars: openarray[char]) =
+proc writeHex*(s: OutputStream, chars: openArray[char]) =
   writeHex s, charsToBytes(chars)
 
 const
@@ -145,7 +145,7 @@ proc readLine*(s: InputStream, keepEol = false): TaintedString {.fsMultiSync.} =
     result.add s.read.char
 
 proc readUntil*(s: InputStream,
-                sep: openarray[char]): Option[TaintedString] =
+                sep: openArray[char]): Option[TaintedString] =
   fsAssert readableNow(s)
   var res = ""
   while s.readable(sep.len):
