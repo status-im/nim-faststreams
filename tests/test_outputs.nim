@@ -54,6 +54,7 @@ suite "output stream":
 
   teardown:
     fileStream.close()
+    unbufferedFileStream.close()
     removeFile fileOutputPath
     removeFile unbufferedFileOutputPath
     dealloc buffer
