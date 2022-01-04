@@ -156,4 +156,5 @@ jobs:
           nim --version
           nimble --version
           nimble install -y --depsOnly
-          env TEST_LANG="${{ matrix.test_lang }}" nimble test
+          env TEST_LANG="c" nimble test
+          env TEST_LANG="cpp" nimble test
