@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  os, unittest, random, strformat,
+  os, unittest2, random, strformat,
   stew/ranges/ptr_arith,
   ../faststreams, ../faststreams/textio
 
@@ -53,6 +53,7 @@ suite "output stream":
       streamWritingToExistingBuffer = unsafeMemoryOutput(buffer, bufferSize)
 
   teardown:
+    fileStream.close()
     removeFile fileOutputPath
     removeFile unbufferedFileOutputPath
     dealloc buffer
