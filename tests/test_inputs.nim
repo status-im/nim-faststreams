@@ -95,11 +95,12 @@ suite "input stream":
 
     while true:
       let r = rand(100)
+      echo "r = ", r
       if r < 20:
         let readSize = 1 + rand(10)
 
         var buf = newSeq[byte](readSize)
-        check buf.len == readSize
+        echo "readSize = ", readSize
         let bytesRead = input.readIntoEx(buf)
         fileContents.add buf.toOpenArray(0, bytesRead - 1).str
         echo "debug:"
@@ -110,6 +111,7 @@ suite "input stream":
 
       elif r < 50:
         let readSize = 6 + rand(10)
+        echo "readSize = ", readSize
 
         if input.readable(readSize):
           fileContents.add input.read(readSize).str
