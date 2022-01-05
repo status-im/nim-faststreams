@@ -101,6 +101,7 @@ suite "input stream":
 
         var buf = newSeq[byte](readSize)
         echo "readSize = ", readSize
+        echo "input.s.len = ", input.s.len
         let bytesRead = input.readIntoEx(buf)
         fileContents.add buf.toOpenArray(0, bytesRead - 1).str
         echo "debug:"
@@ -112,6 +113,7 @@ suite "input stream":
       elif r < 50:
         let readSize = 6 + rand(10)
         echo "readSize = ", readSize
+        echo "input.s.len = ", input.s.len
 
         if input.readable(readSize):
           fileContents.add input.read(readSize).str
@@ -123,6 +125,7 @@ suite "input stream":
       else:
         if input.readable:
           fileContents.add input.read.char
+          echo "readSize = 1"
 
       # You can uncomment this to get earlier failure in the test:
       when false:
