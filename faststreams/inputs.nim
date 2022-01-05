@@ -95,7 +95,6 @@ when fsAsyncSupport:
   template Async*(s: AsyncInputStream): AsyncInputStream = s
 
 proc disconnectInputDevice(s: InputStream) =
-  echo "in disconnectInputDevice()"
   # TODO
   # Document the behavior that closeAsync is preferred
   if s.vtable != nil:
@@ -790,11 +789,8 @@ proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
 template readIntoExImpl(s: InputStream,
                         dst: ptr byte, dstLen: Natural,
                         awaiter, readOp: untyped): Natural =
-  echo "dstLen = ", dstLen
   let totalBytesDrained = drainBuffersInto(s, dst, dstLen)
-  echo "totalBytesDrained = ", totalBytesDrained
   var bytesDeficit = (dstLen - totalBytesDrained)
-  echo "bytesDeficit = ", bytesDeficit
 
   if bytesDeficit > 0:
     var adjustedDst = offset(dst, totalBytesDrained)
@@ -802,16 +798,11 @@ template readIntoExImpl(s: InputStream,
     while true:
       if s.vtable.isNil():
         break
-      echo "before s.vtable.readOp()"
-      echo "s.vtable = ", cast[uint](s.vtable)
-      echo "s.vtable.readOp = ", cast[uint](s.vtable.readOp)
-      echo "s.vtable.readSync = ", cast[uint](s.vtable.readSync)
+
       let newBytesRead = awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
-      echo "newBytesRead = ", newBytesRead
 
       s.spanEndPos += newBytesRead
       bytesDeficit -= newBytesRead
-      echo "bytesDeficit = ", bytesDeficit
 
       if s.buffers.eofReached:
         disconnectInputDevice(s)
