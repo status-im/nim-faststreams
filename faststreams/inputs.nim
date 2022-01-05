@@ -373,6 +373,7 @@ let fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     let file = FileInputStream(s).file
+    echo "file = ", cast[uint](file)
     implementSingleRead(s.buffers, dst, dstLen,
                         {partialReadIsEof},
                         readStartAddr, readLen):
