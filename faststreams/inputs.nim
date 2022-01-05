@@ -373,6 +373,7 @@ template withReadableRange*(sp: MaybeAsyncInputStream,
 let fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    echo "in fileInputVTable.readSync()"
     let file = FileInputStream(s).file
     implementSingleRead(s.buffers, dst, dstLen,
                         {partialReadIsEof},
@@ -801,6 +802,9 @@ template readIntoExImpl(s: InputStream,
 
     while true:
       echo "before s.vtable.readOp()"
+      echo "s.vtable = ", cast[uint](s.vtable)
+      echo "s.vtable.readOp = ", cast[uint](s.vtable.readOp)
+      echo "s.vtable.readSync = ", cast[uint](s.vtable.readSync)
       let newBytesRead = awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
       echo "newBytesRead = ", newBytesRead
 
