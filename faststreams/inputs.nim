@@ -95,6 +95,7 @@ when fsAsyncSupport:
   template Async*(s: AsyncInputStream): AsyncInputStream = s
 
 proc disconnectInputDevice(s: InputStream) =
+  echo "in disconnectInputDevice()"
   # TODO
   # Document the behavior that closeAsync is preferred
   if s.vtable != nil:
@@ -373,7 +374,6 @@ let fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
     let file = FileInputStream(s).file
-    echo "file = ", cast[uint](file)
     implementSingleRead(s.buffers, dst, dstLen,
                         {partialReadIsEof},
                         readStartAddr, readLen):
@@ -800,6 +800,7 @@ template readIntoExImpl(s: InputStream,
     var adjustedDst = offset(dst, totalBytesDrained)
 
     while true:
+      echo "before s.vtable.readOp()"
       let newBytesRead = awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
       echo "newBytesRead = ", newBytesRead
 
@@ -814,7 +815,7 @@ template readIntoExImpl(s: InputStream,
       if bytesDeficit == 0:
         break
 
-      adjustedDst = offset(dst, newBytesRead)
+      adjustedDst = offset(adjustedDst, newBytesRead)
 
   dstLen - bytesDeficit
 
