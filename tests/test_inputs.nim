@@ -102,6 +102,8 @@ suite "input stream":
         check buf.len == readSize
         let bytesRead = input.readIntoEx(buf)
         fileContents.add buf.toOpenArray(0, bytesRead - 1).str
+        echo "debug:"
+        echo fileContents
 
         if bytesRead < buf.len:
           break
