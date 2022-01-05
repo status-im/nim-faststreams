@@ -58,26 +58,27 @@ suite "input stream":
     var input = memFileInput("files" / "empty_file")
 
   template asciiTableFileTest(name: string, body: untyped) =
-    test name & " of ascii table with regular pageSize":
-      var input {.inject.} = fileInput(asciiTableFile)
-      try:
-        body
-      finally:
-        close input
+    suite name:
+      test name & " of ascii table with regular pageSize":
+        var input {.inject.} = fileInput(asciiTableFile)
+        try:
+          body
+        finally:
+          close input
 
-    test name & " of ascii table with pageSize = 10":
-      var input {.inject.} = fileInput(asciiTableFile, pageSize = 10)
-      try:
-        body
-      finally:
-        close input
+      test name & " of ascii table with pageSize = 10":
+        var input {.inject.} = fileInput(asciiTableFile, pageSize = 10)
+        try:
+          body
+        finally:
+          close input
 
-    test name & " of ascii table with pageSize = 1":
-      var input {.inject.} = fileInput(asciiTableFile, pageSize = 1)
-      try:
-        body
-      finally:
-        close input
+      test name & " of ascii table with pageSize = 1":
+        var input {.inject.} = fileInput(asciiTableFile, pageSize = 1)
+        try:
+          body
+        finally:
+          close input
 
   # TODO: fileInput with offset
   #        - in the middle of the
@@ -124,41 +125,42 @@ suite "input stream":
 
     check fileContents == asciiTableContents
 
-  test "missing file input":
-    const fileName = "there-is-no-such-faststreams-file"
+  suite "misc":
+    test "missing file input":
+      const fileName = "there-is-no-such-faststreams-file"
 
-    check not fileExists(fileName)
-    expect CatchableError: discard fileInput(fileName)
+      check not fileExists(fileName)
+      expect CatchableError: discard fileInput(fileName)
 
-    check not fileExists(fileName)
-    expect CatchableError: discard memFileInput(fileName)
+      check not fileExists(fileName)
+      expect CatchableError: discard memFileInput(fileName)
 
-    check not fileExists(fileName)
+      check not fileExists(fileName)
 
-  test "non-blocking reads":
-    let s = fileInput(asciiTableFile, pageSize = 100)
-    if s.readable(20):
-      s.withReadableRange(20, r):
-        check r.len.get == 20
-        check r.totalUnconsumedBytes == 20
-        check r.readAll.len == 20
+    test "non-blocking reads":
+      let s = fileInput(asciiTableFile, pageSize = 100)
+      if s.readable(20):
+        s.withReadableRange(20, r):
+          check r.len.get == 20
+          check r.totalUnconsumedBytes == 20
+          check r.readAll.len == 20
 
-    check s.readable
+      check s.readable
 
-    if s.readable(200):
-      s.withReadableRange(200, r):
-        check r.len.get == 200
-        check r.totalUnconsumedBytes == 200
-        check r.readAll.len == 200
+      if s.readable(200):
+        s.withReadableRange(200, r):
+          check r.len.get == 200
+          check r.totalUnconsumedBytes == 200
+          check r.readAll.len == 200
 
-    check s.readable
+      check s.readable
 
-  test "simple":
-    var input = repeat("1234 5678 90AB CDEF\n", 1000)
-    var stream = unsafeMemoryInput(input)
+    test "simple":
+      var input = repeat("1234 5678 90AB CDEF\n", 1000)
+      var stream = unsafeMemoryInput(input)
 
-    check:
-      (stream.read(4) == "1234".toOpenArrayByte(0, 3))
+      check:
+        (stream.read(4) == "1234".toOpenArrayByte(0, 3))
 
   template posTest(name: string, setup: untyped) =
     test name:

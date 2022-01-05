@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  os, unittest, random, strformat,
+  os, unittest2, random, strformat,
   stew/ranges/ptr_arith,
   ../faststreams, ../faststreams/textio
 
@@ -20,12 +20,10 @@ proc repeat(b: byte, count: int): seq[byte] =
   result = newSeq[byte](count)
   for i in 0 ..< count: result[i] = b
 
-const line = "123456789123456789123456789123456789\n\n\n\n\n"
-
 proc randomBytes(n: int): seq[byte] =
   result.newSeq n
   for i in 0 ..< n:
-    result[i] = byte(rand(line))
+    result[i] = byte(rand(int('1')..int('9')))
 
 proc readAllAndClose(s: InputStream): seq[byte] =
   while s.readable:
@@ -55,6 +53,8 @@ suite "output stream":
       streamWritingToExistingBuffer = unsafeMemoryOutput(buffer, bufferSize)
 
   teardown:
+    fileStream.close()
+    unbufferedFileStream.close()
     removeFile fileOutputPath
     removeFile unbufferedFileOutputPath
     dealloc buffer

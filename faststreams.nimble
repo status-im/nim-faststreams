@@ -14,20 +14,18 @@ requires "nim >= 1.2.0",
          "unittest2"
 
 ### Helper functions
-proc test(env, path: string) =
+proc test(args, path: string) =
   # Compilation language is controlled by TEST_LANG
-  var lang = "c"
-  if existsEnv"TEST_LANG":
-    lang = getEnv"TEST_LANG"
+  let lang = getEnv("TEST_LANG", "c")
 
-  let common_args = "-r -f --hints:off --skipParentCfg --styleCheck:usages --styleCheck:error"
+  let common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --skipParentCfg --styleCheck:usages --styleCheck:error"
 
-  exec "nim " & lang & " " & env &
+  exec "nim " & lang & " " & args &
     " -d:asyncBackend=none " & common_args & " " & path
-  exec "nim " & lang & " " & env &
+  exec "nim " & lang & " " & args &
     " -d:asyncBackend=chronos " & common_args & " " & path
   # TODO std backend is broken / untested
-  # exec "nim " & lang & " " & env &
+  # exec "nim " & lang & " " & args &
   #  " -d:asyncBackend=asyncdispatch " & common_args & " " & path
 
 task test, "Run all tests":

@@ -796,6 +796,9 @@ template readIntoExImpl(s: InputStream,
     var adjustedDst = offset(dst, totalBytesDrained)
 
     while true:
+      if s.vtable.isNil():
+        break
+
       let newBytesRead = awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
 
       s.spanEndPos += newBytesRead
@@ -808,7 +811,7 @@ template readIntoExImpl(s: InputStream,
       if bytesDeficit == 0:
         break
 
-      adjustedDst = offset(dst, newBytesRead)
+      adjustedDst = offset(adjustedDst, newBytesRead)
 
   dstLen - bytesDeficit
 
