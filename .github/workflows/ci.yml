@@ -12,17 +12,18 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - os: linux
-            cpu: amd64
-          - os: linux
-            cpu: i386
-          - os: macos
-            cpu: amd64
+          #- os: linux
+            #cpu: amd64
+          #- os: linux
+            #cpu: i386
+          #- os: macos
+            #cpu: amd64
           - os: windows
             cpu: amd64
           #- os: windows
             #cpu: i386
-        branch: [version-1-2, version-1-4, version-1-6, devel]
+        #branch: [version-1-2, version-1-4, version-1-6, devel]
+        branch: [devel]
         include:
           - target:
               os: linux

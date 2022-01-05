@@ -789,17 +789,22 @@ proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
 template readIntoExImpl(s: InputStream,
                         dst: ptr byte, dstLen: Natural,
                         awaiter, readOp: untyped): Natural =
+  echo "dstLen = ", dstLen
   let totalBytesDrained = drainBuffersInto(s, dst, dstLen)
+  echo "totalBytesDrained = ", totalBytesDrained
   var bytesDeficit = (dstLen - totalBytesDrained)
+  echo "bytesDeficit = ", bytesDeficit
 
   if bytesDeficit > 0:
     var adjustedDst = offset(dst, totalBytesDrained)
 
     while true:
       let newBytesRead = awaiter s.vtable.readOp(s, adjustedDst, bytesDeficit)
+      echo "newBytesRead = ", newBytesRead
 
       s.spanEndPos += newBytesRead
       bytesDeficit -= newBytesRead
+      echo "bytesDeficit = ", bytesDeficit
 
       if s.buffers.eofReached:
         disconnectInputDevice(s)
