@@ -273,6 +273,14 @@ let fileOutputVTable = OutputStreamVTable(
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     flushFile FileOutputStream(s).file
   ,
+  flushAsync: proc (s: OutputStream): Future[void]
+                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    fsAssert FileOutputStream(s).allowAsyncOps
+    flushFile FileOutputStream(s).file
+    result = newFuture[void]()
+    fsTranslateErrors "Unexpected exception from merely completing a future":
+      result.complete()
+  ,
   closeSync: proc (s: OutputStream)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
     close FileOutputStream(s).file

@@ -127,7 +127,7 @@ when fsAsyncSupport:
         flush destination
     ,
     flushAsync: proc (s: OutputStream): Future[void]
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                     {.nimcall, gcsafe, raises: [IOError, Defect].} =
       fsTranslateErrors "Unexpected error from the async macro":
         let destination = LayeredOutputStream(s).destination
         if destination != nil:
