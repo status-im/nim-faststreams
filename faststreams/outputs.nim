@@ -101,6 +101,7 @@ type
 
   FileOutputStream = ref object of OutputStream
     file: File
+    allowAsyncOps: bool
 
 template Sync*(s: OutputStream): OutputStream = s
 
@@ -250,14 +251,23 @@ template implementWrites*(buffersParam: PageBuffers,
     let bytesWritten = writeBlock
     if bytesWritten != writeLenVar: raiseError()
 
-let fileOutputVTable = OutputStreamVTable(
-  writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
+proc writeFileSync(s: OutputStream, src: pointer, srcLen: Natural)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    var file = FileOutputStream(s).file
+  var file = FileOutputStream(s).file
 
-    implementWrites(s.buffers, src, srcLen, "FILE",
-                    writeStartAddr, writeLen):
-      file.writeBuffer(writeStartAddr, writeLen)
+  implementWrites(s.buffers, src, srcLen, "FILE",
+                  writeStartAddr, writeLen):
+    file.writeBuffer(writeStartAddr, writeLen)
+
+let fileOutputVTable = OutputStreamVTable(
+  writeSync: writeFileSync,
+  writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
+                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    fsAssert FileOutputStream(s).allowAsyncOps
+    writeFileSync(s, src, srcLen)
+    result = newFuture[void]()
+    fsTranslateErrors "Unexpected exception from merely completing a future":
+      result.complete()
   ,
   flushSync: proc (s: OutputStream)
                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
@@ -276,18 +286,21 @@ template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
     unsafeAddr vtable
 
 proc fileOutput*(f: File,
-                 pageSize = defaultPageSize): OutputStreamHandle
+                 pageSize = defaultPageSize,
+                 allowAsyncOps = false): OutputStreamHandle
                 {.raises: [IOError, Defect].} =
   makeHandle FileOutputStream(
     vtable: vtableAddr fileOutputVTable,
     buffers: initPageBuffers(pageSize),
-    file: f)
+    file: f,
+    allowAsyncOps: allowAsyncOps)
 
 proc fileOutput*(filename: string,
                  fileMode: FileMode = fmWrite,
-                 pageSize = defaultPageSize): OutputStreamHandle
+                 pageSize = defaultPageSize,
+                 allowAsyncOps = false): OutputStreamHandle
                 {.raises: [IOError, Defect].} =
-  fileOutput(open(filename, fileMode), pageSize)
+  fileOutput(open(filename, fileMode), pageSize, allowAsyncOps)
 
 proc pos*(s: OutputStream): int =
   s.spanEndPos - s.span.len
