@@ -854,7 +854,7 @@ when fsAsyncSupport:
       let s = OutputStream sp
       flushImpl(s, fsAwait, writeAsync, flushAsync)
 
-    proc flushAsync*(s: AsyncOutputStream) {.async.} =
+    proc flushSync*(s: AsyncOutputStream) {.async.} =
       flush s
 
     template close*(sp: AsyncOutputStream) =
@@ -864,6 +864,6 @@ when fsAsyncSupport:
       if s.closeFut != nil:
         fsAwait s.closeFut
 
-    proc closeAsync*(s: AsyncOutputStream) {.async.} =
+    proc closeSync*(s: AsyncOutputStream) {.async.} =
       close s
 
