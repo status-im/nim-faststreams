@@ -259,32 +259,43 @@ proc writeFileSync(s: OutputStream, src: pointer, srcLen: Natural)
                   writeStartAddr, writeLen):
     file.writeBuffer(writeStartAddr, writeLen)
 
-let fileOutputVTable = OutputStreamVTable(
-  writeSync: writeFileSync,
-  writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+proc flushFileSync(s: OutputStream)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  flushFile FileOutputStream(s).file
+
+proc closeFileSync(s: OutputStream)
+                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  close FileOutputStream(s).file
+
+when fsAsyncSupport:
+  proc writeFileAsync(s: OutputStream, src: pointer, srcLen: Natural): Future[void]
+                     {.nimcall, gcsafe, raises: [IOError, Defect].} =
     fsAssert FileOutputStream(s).allowAsyncOps
     writeFileSync(s, src, srcLen)
     result = newFuture[void]()
     fsTranslateErrors "Unexpected exception from merely completing a future":
       result.complete()
-  ,
-  flushSync: proc (s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    flushFile FileOutputStream(s).file
-  ,
-  flushAsync: proc (s: OutputStream): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+
+  proc flushFileAsync(s: OutputStream): Future[void]
+                     {.nimcall, gcsafe, raises: [IOError, Defect].} =
     fsAssert FileOutputStream(s).allowAsyncOps
     flushFile FileOutputStream(s).file
     result = newFuture[void]()
     fsTranslateErrors "Unexpected exception from merely completing a future":
       result.complete()
-  ,
-  closeSync: proc (s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
-    close FileOutputStream(s).file
-)
+
+let fileOutputVTable = when fsAsyncSupport:
+  OutputStreamVTable(
+    writeSync: writeFileSync,
+    writeAsync: writeFileAsync,
+    flushSync: flushFileSync,
+    flushAsync: flushFileAsync,
+    closeSync: closeFileSync)
+else:
+  OutputStreamVTable(
+    writeSync: writeFileSync,
+    flushSync: flushFileSync,
+    closeSync: closeFileSync)
 
 template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
   ## This is a simple work-around for the somewhat broken side
@@ -862,7 +873,7 @@ when fsAsyncSupport:
       let s = OutputStream sp
       flushImpl(s, fsAwait, writeAsync, flushAsync)
 
-    proc flushSync*(s: AsyncOutputStream) {.async.} =
+    proc flushAsync*(s: AsyncOutputStream) {.async.} =
       flush s
 
     template close*(sp: AsyncOutputStream) =
@@ -872,6 +883,5 @@ when fsAsyncSupport:
       if s.closeFut != nil:
         fsAwait s.closeFut
 
-    proc closeSync*(s: AsyncOutputStream) {.async.} =
+    proc closeAsync*(s: AsyncOutputStream) {.async.} =
       close s
-
