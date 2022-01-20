@@ -757,8 +757,7 @@ proc drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
     # Since we reached the end of the current page,
     # we have to do the equivalent of `getNewSpan`:
 
-    # TODO: what if the page was extended?
-    if s.buffers.len > 0:
+    if s.buffers.len > 0 and s.buffers[0].pageLen == 0:
       discard s.buffers.popFirst()
 
     for page in consumePages(s.buffers):
