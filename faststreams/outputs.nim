@@ -492,19 +492,23 @@ proc getWritableBytesOnANewPage(s: OutputStream, spanSize: Natural): ptr byte =
 
 template getWritableBytes*(sp: OutputStream, spanSizeParam: Natural): openArray[byte] =
   ## Returns a contiguous range of memory that the caller is free to populate fully
-  ## or partially. The caller indicates how many bytes were written to the span by
-  ## calling `advance(numberOfBytes)` once or multiple times. Advancing the stream
-  ## past the allocated span size is considered a defect. The typical usage pattern
-  ## of this API looks as follows:
+  ## or partially. The caller indicates how many bytes were written to the openArray
+  ## by calling `advance(numberOfBytes)` once or multiple times. Advancing the stream
+  ## past the allocated size is considered a defect. The typical usage pattern of this
+  ## API looks as follows:
   ##
   ## stream.advance(myComponent.writeBlock(stream.getWritableBytes(maxBlockSize)))
   ##
   ## In the example, `writeBlock` would be a function returning the number of bytes
-  ## written to the span.
+  ## written to the openArray.
   ##
   ## While it's not illegal to issue other writing operations to the stream during
-  ## the `getWritetableSpan` -> `advance` sequence, doing this is not recommended
+  ## the `getWritetableBytes` -> `advance` sequence, doing this is not recommended
   ## because it will result in overwriting the same range of bytes.
+  ##
+  ## One limitation of this API is that the returned `openArray` will be considered
+  ## read-only by Nim. You may need to use `unsafeAddr` in your writing functions
+  ## to get around this limitation.
   let
     s = sp
     spanSize = spanSizeParam

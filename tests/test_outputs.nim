@@ -25,7 +25,7 @@ const line = "123456789123456789123456789123456789\n\n\n\n\n"
 proc randomBytes(n: int): seq[byte] =
   result.newSeq n
   for i in 0 ..< n:
-    result[i] = byte(rand(line))
+    result[i] = byte(line[rand(line.len - 1)])
 
 proc readAllAndClose(s: InputStream): seq[byte] =
   while s.readable:
