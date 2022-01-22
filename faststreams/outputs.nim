@@ -132,8 +132,11 @@ template flushImpl(s: OutputStream, awaiter, writeOp, flushOp: untyped) =
   fsAssert s.extCursorsCount == 0
   if s.vtable != nil:
     if s.buffers != nil:
+      let runway = s.span.len
       trackWrittenTo(s.buffers, s.span.startAddr)
       awaiter s.vtable.writeOp(s, nil, 0)
+      s.span = getWritableSpan(s.buffers)
+      s.spanEndPos += s.span.len - runway
 
     if s.vtable.flushOp != nil:
       awaiter s.vtable.flushOp(s)
