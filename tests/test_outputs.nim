@@ -213,6 +213,11 @@ suite "output stream":
 
     checkOutputsMatch()
 
+proc writeBlock(data: openArray[byte], output: openArray[byte]): int =
+  doAssert data.len <= output.len
+  copyMem(unsafeAddr output[0], unsafeAddr data[0], data.len)
+  data.len
+
 suite "randomized tests":
   type
     WriteTypes = enum
@@ -357,7 +362,14 @@ suite "randomized tests":
       for i in 0 .. 3000:
         let bytes = randomBytes(rand(9999) + 1)
         referenceBytes.add bytes
-        output.write bytes
+
+        var openArraySize = rand(12000)
+        if openArraySize >= bytes.len:
+          # Make sure that sometimes `writeBlock` populates the entire span
+          if i < 100: openArraySize = bytes.len
+          output.advance writeBlock(bytes, output.getWritableBytes(openArraySize))
+        else:
+          output.write bytes
 
       close output
 

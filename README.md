@@ -473,6 +473,10 @@ bytes before continuing. The rationale here is that introducing an interruption
 point at every `write` produces less optimal code, but if this is desired you
 can use the `stream.writeAndWait` API.
 
+If you have existing algorithms that output data to an `openArray`, you can use
+the `stream.getWritableBytes` API to continue using them without introducing any
+intermediate buffers.
+
 #### Delayed Writes
 
 Many protocols and formats employ fixed-size and variable-size length prefixes
