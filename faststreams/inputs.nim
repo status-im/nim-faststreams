@@ -442,7 +442,11 @@ proc fileInput*(filename: string,
   return fileInput(file, offset, pageSize)
 
 proc unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
-  let head = unsafeAddr mem[0]
+  let head =
+    if mem.len > 0:
+      unsafeAddr mem[0]
+    else:
+      default(ptr byte)
 
   makeHandle InputStream(
     span: PageSpan(
