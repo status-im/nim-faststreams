@@ -11,7 +11,7 @@ type
     startAddr*, endAddr*: ptr byte
 
   Page* = object
-    consumedTo*: Natural
+    consumedTo*: int
     writtenTo*: Natural
     data*: ref string
 
