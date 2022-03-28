@@ -121,7 +121,7 @@ proc base64decode*(i: InputStream, o: OutputStream) {.fsMultiSync.} =
         inputChar(d)
         outputChar(c shl 6 or d shr 0)
   elif i.readable:
-    raise newException(ValueError, "The input stream has insufficient nymber of bytes for base64 decoding")
+    raise newException(ValueError, "The input stream has insufficient number of bytes for base64 decoding")
 
   close o
 

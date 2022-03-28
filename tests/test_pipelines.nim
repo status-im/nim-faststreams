@@ -41,7 +41,7 @@ when fsAsyncSupport:
   template timeit(timerVar: var Nanos, code: untyped) =
     let t0 = getTicks()
     code
-    timerVar = int(getTicks() - t0) div 1000000
+    timerVar = int64(getTicks() - t0) div 1000000
 
   proc getOutput(sp: AsyncInputStream, T: type string): Future[string] {.async.} =
     # this proc is a quick hack to let the test pass
