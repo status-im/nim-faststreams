@@ -400,3 +400,28 @@ suite "randomized tests":
       if fileExists(randomBytesFileName):
         removeFile randomBytesFileName
 
+  test "ensureRunway":
+    var output = memoryOutput()
+
+    const writes = 256
+    var buffer = newSeq[byte](writes)
+    let totalBytes = block:
+      var tmp = 0
+      for i in 0..<writes:
+        tmp += i
+        buffer[i] = byte(i)
+      tmp
+
+    output.ensureRunway(totalBytes)
+
+    for i in 0..<writes:
+      output.write(buffer.toOpenArray(0, i - 1))
+
+    output.flush()
+
+    let res = output.getOutput()
+    var j = 0
+    for i in 0..<writes:
+      check:
+        res[j..<j+i] == buffer[0..<i]
+      j += i

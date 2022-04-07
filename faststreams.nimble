@@ -29,6 +29,9 @@ proc test(args, path: string) =
   #  " -d:asyncBackend=asyncdispatch " & common_args & " " & path
 
 task test, "Run all tests":
+  test "-d:debug   --threads:off", "tests/all_tests"
+  test "-d:release --threads:off", "tests/all_tests"
+  test "-d:danger  --threads:off", "tests/all_tests"
   test "-d:debug   --threads:on", "tests/all_tests"
   test "-d:release --threads:on", "tests/all_tests"
   test "-d:danger  --threads:on", "tests/all_tests"
