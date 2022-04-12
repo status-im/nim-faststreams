@@ -18,7 +18,10 @@ proc test(args, path: string) =
   # Compilation language is controlled by TEST_LANG
   let lang = getEnv("TEST_LANG", "c")
 
-  let common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --skipParentCfg --styleCheck:usages --styleCheck:error"
+  var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:error"
+
+  if getEnv("IN_STATUS_NIM_WORKSPACE") == "":
+    common_args &= " --skipParentCfg"
 
   exec "nim " & lang & " " & args &
     " -d:asyncBackend=none " & common_args & " " & path
