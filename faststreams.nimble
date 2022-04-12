@@ -20,7 +20,7 @@ proc test(args, path: string) =
 
   var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:error"
 
-  if getEnv("IN_STATUS_NIM_WORKSPACE") == "":
+  if getEnv("NIMBUS_ENV_DIR") != "":
     common_args &= " --skipParentCfg"
 
   exec "nim " & lang & " " & args &
