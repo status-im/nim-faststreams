@@ -18,7 +18,10 @@ proc test(args, path: string) =
   # Compilation language is controlled by TEST_LANG
   let lang = getEnv("TEST_LANG", "c")
 
-  let common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --skipParentCfg --styleCheck:usages --styleCheck:error"
+  var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:error"
+
+  if getEnv("NIMBUS_ENV_DIR") != "":
+    common_args &= " --skipParentCfg"
 
   exec "nim " & lang & " " & args &
     " -d:asyncBackend=none " & common_args & " " & path
@@ -29,6 +32,9 @@ proc test(args, path: string) =
   #  " -d:asyncBackend=asyncdispatch " & common_args & " " & path
 
 task test, "Run all tests":
+  test "-d:debug   --threads:off", "tests/all_tests"
+  test "-d:release --threads:off", "tests/all_tests"
+  test "-d:danger  --threads:off", "tests/all_tests"
   test "-d:debug   --threads:on", "tests/all_tests"
   test "-d:release --threads:on", "tests/all_tests"
   test "-d:danger  --threads:on", "tests/all_tests"
