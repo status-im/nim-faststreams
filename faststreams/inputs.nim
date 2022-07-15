@@ -328,10 +328,12 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
     runwayInBuffers = if s.buffers == nil:
                         0
                       elif s.buffers.fauxEofPos != 0:
+                        debugEcho "faux end ", s.buffers.fauxEofPos - s.spanEndPos
                         s.buffers.fauxEofPos - s.spanEndPos
                       else:
                         s.buffers.totalBufferedBytes
 
+  debugEcho "runwah in buffers ", runwayInBuffers
   if localRunway == 0 and runwayInBuffers > 0:
     getNewSpan s
 
@@ -341,12 +343,16 @@ proc limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
   s.vtable = nil
 
   let runway = s.span.len
+  echo "runway ", runway
+  echo "end pos ", s.spanEndPos
+  echo "range len ", rangeLen
   if rangeLen > runway:
     fsAssert s.buffers != nil
-    return s.buffers.setFauxEof(rangeLen - runway + s.spanEndPos)
+    return s.buffers.setFauxEof(rangeLen + s.spanEndPos - runway)
   else:
     s.span.endAddr = offset(s.span.startAddr, rangeLen)
     let bytesToUnconsume = runway - rangeLen
+    echo "bytes to unconsume ", bytesToUnconsume
     s.spanEndPos -= bytesToUnconsume
     if s.buffers != nil:
       s.buffers.queue.peekFirst.consumedTo -= bytesToUnconsume
@@ -359,6 +365,7 @@ template withReadableRange*(sp: MaybeAsyncInputStream,
     s = InputStream sp
     vtable = s.vtable
     origEndAddr = s.span.endAddr
+    origEndPos = s.spanEndPos
     origEof = limitReadableRange(s, rangeLen)
 
   try:
@@ -366,6 +373,7 @@ template withReadableRange*(sp: MaybeAsyncInputStream,
     blk
   finally:
     s.vtable = vtable
+    s.spanEndPos = origEndPos
     s.span.endAddr = origEndAddr
     if s.buffers != nil: restoreEof(s.buffers, origEof)
 
@@ -529,6 +537,8 @@ template bufferMoreDataImpl(s, awaiter, readOp: untyped): bool =
   # end of the memory buffer, so we can signal EOF:
   if s.buffers == nil:
     false
+  elif s.spanEndPos == s.buffers.fauxEofPos:
+    false
   else:
     # There might be additional pages in our buffer queue. If so, we
     # just jump to the next one:
@@ -612,6 +622,7 @@ func continueAfterReadN(s: InputStream,
 
 template readableNImpl(s, n, awaiter, readOp: untyped): bool =
   let runway = totalUnconsumedBytes(s)
+  echo "readable N runway ", runway, " vs ", n
   if runway >= n:
     true
   elif s.buffers == nil or s.vtable == nil or s.vtable.readOp == nil:
@@ -909,10 +920,12 @@ template readNImpl(sp: InputStream,
     createAllocMemOp(np)
 
     if n > runway:
+      echo "drainig"
       startAddr = allocMem(n)
       let drained {.used.} = drainBuffersInto(s, startAddr, n)
       fsAssert drained == n
     else:
+      echo "bumping"
       startAddr = s.span.startAddr
       bumpPointer s.span, n
 

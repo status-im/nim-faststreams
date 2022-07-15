@@ -261,6 +261,7 @@ template len*(buffers: PageBuffers): Natural =
 
 func totalBufferedBytes*(buffers: PageBuffers): Natural =
   for i in 0 ..< buffers.queue.len:
+    debugEcho "page ", buffers.queue[i].pageLen
     result += buffers.queue[i].pageLen
 
 func canAcceptWrite*(buffers: PageBuffers, writeSize: Natural): bool =
