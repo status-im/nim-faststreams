@@ -13,12 +13,18 @@ requires "nim >= 1.2.0",
          "chronos",
          "unittest2"
 
+const styleCheckStyle =
+  if (NimMajor, NimMinor) < (1, 6):
+    "hint"
+  else:
+    "error"
+
 ### Helper functions
 proc test(args, path: string) =
   # Compilation language is controlled by TEST_LANG
   let lang = getEnv("TEST_LANG", "c")
 
-  var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:error"
+  var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:" & styleCheckStyle
 
   if getEnv("NIMBUS_ENV_DIR") != "":
     common_args &= " --skipParentCfg"
