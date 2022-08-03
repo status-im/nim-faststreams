@@ -481,7 +481,7 @@ func memoryInput*(data: openArray[byte]): InputStreamHandle =
       page = buffers.addWritablePage(data.len)
       pageSpan = page.fullSpan
 
-    copyMem(pageSpan.startAddr, unsafeAddr data[0], data.len)
+    copyMem(pageSpan.startAddr, baseAddr(data), data.len)
 
     InputStream(buffers: buffers,
                 span: pageSpan,

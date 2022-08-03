@@ -335,7 +335,7 @@ template writeByte*(span: var PageSpan, val: byte) =
 
 template charsToBytes*(chars: openArray[char]): untyped =
   bind makeOpenArray
-  var charsStart = unsafeAddr chars[0]
+  var charsStart = baseAddr(chars)
   makeOpenArray(cast[ptr byte](charsStart), chars.len)
 
 type
