@@ -13,16 +13,19 @@ requires "nim >= 1.2.0",
          "chronos",
          "unittest2"
 
-const styleCheckStyle =
-  if (NimMajor, NimMinor) < (1, 6):
-    "hint"
-  else:
-    "error"
-
 ### Helper functions
 proc test(args, path: string) =
   # Compilation language is controlled by TEST_LANG
   let lang = getEnv("TEST_LANG", "c")
+
+  # nnkArglist was changed to nnkArgList, so can't always use --styleCheck:error
+  # https://github.com/nim-lang/Nim/pull/17529
+  # https://github.com/nim-lang/Nim/pull/19822
+  let styleCheckStyle =
+    if (NimMajor, NimMinor) < (1, 6):
+      "hint"
+    else:
+      "error"
 
   var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:" & styleCheckStyle
 
