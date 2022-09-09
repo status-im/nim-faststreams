@@ -2,7 +2,6 @@
 
 import
   os, unittest2, strutils, random,
-  testutils,
   ../faststreams, ../faststreams/textio
 
 setCurrentDir getAppDir()
