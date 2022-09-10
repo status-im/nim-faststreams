@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  testutils/unittests,
+  unittest2,
 
   # FastStreams modules:
   ../faststreams/[pipelines, multisync]
@@ -13,7 +13,8 @@ when fsAsyncSupport:
     # FastStreams modules:
     ../faststreams/[pipelines, multisync],
     # Testing modules:
-    ./base64 as fsBase64
+    ./base64 as fsBase64,
+    chronos/unittest2/asynctests
 
   include system/timers
 
