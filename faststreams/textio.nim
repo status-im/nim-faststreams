@@ -126,7 +126,7 @@ const
   NewLines* = {'\r', '\n'}
   Digits* = {'0'..'9'}
 
-proc readLine*(s: InputStream, keepEol = false): TaintedString {.fsMultiSync.} =
+proc readLine*(s: InputStream, keepEol = false): string {.fsMultiSync.} =
   fsAssert readableNow(s)
 
   while s.readable:
@@ -145,7 +145,7 @@ proc readLine*(s: InputStream, keepEol = false): TaintedString {.fsMultiSync.} =
     result.add s.read.char
 
 proc readUntil*(s: InputStream,
-                sep: openArray[char]): Option[TaintedString] =
+                sep: openArray[char]): Option[string] =
   fsAssert readableNow(s)
   var res = ""
   while s.readable(sep.len):
@@ -153,14 +153,14 @@ proc readUntil*(s: InputStream,
       return some(res)
     res.add s.read.char
 
-template nextLine*(sp: InputStream, keepEol = false): Option[TaintedString] =
+template nextLine*(sp: InputStream, keepEol = false): Option[string] =
   let s = sp
   if s.readable:
     some readLine(s, keepEol)
   else:
     none string
 
-iterator lines*(s: InputStream, keepEol = false): TaintedString =
+iterator lines*(s: InputStream, keepEol = false): string =
   while s.readable:
     yield readLine(s, keepEol)
 
