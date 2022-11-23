@@ -334,9 +334,7 @@ template writeByte*(span: var PageSpan, val: byte) =
   span.startAddr = offset(span.startAddr, 1)
 
 template charsToBytes*(chars: openArray[char]): untyped =
-  bind makeOpenArray
-  var charsStart = baseAddr(chars)
-  makeOpenArray(cast[ptr byte](charsStart), chars.len)
+  chars.toOpenArrayByte(0, chars.len - 1)
 
 type
   ReadFlag* = enum
