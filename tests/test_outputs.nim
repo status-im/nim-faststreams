@@ -2,7 +2,7 @@
 
 import
   os, unittest2, random, strformat,
-  stew/ranges/ptr_arith,
+  stew/ptrops,
   ../faststreams, ../faststreams/textio
 
 proc bytes(s: string): seq[byte] =
