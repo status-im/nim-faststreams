@@ -805,8 +805,7 @@ template write*(c: var WriteCursor, bytes: openArray[byte]) =
   writeBytesToCursor(c, bytes)
 
 proc write*(c: var WriteCursor, chars: openArray[char]) {.inline.} =
-  var charsStart = baseAddr(chars)
-  writeBytesToCursor(c, makeOpenArray(cast[ptr byte](charsStart), chars.len))
+  writeBytesToCursor(c, chars.toOpenArrayByte(0, chars.len - 1))
 
 proc writeMemCopy*[T](c: var WriteCursor, value: T) =
   writeBytesToCursor(c, memCopyToBytes(value))
