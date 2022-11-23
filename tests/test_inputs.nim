@@ -4,7 +4,7 @@ import
   os, unittest2, strutils, random,
   ../faststreams, ../faststreams/textio
 
-setCurrentDir getAppDir()
+setCurrentDir currentSourcePath.parentDir
 
 proc str(bytes: openArray[byte]): string =
   result = newStringOfCap(bytes.len)

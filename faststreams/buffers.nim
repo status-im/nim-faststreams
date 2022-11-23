@@ -1,6 +1,6 @@
 import
   deques,
-  stew/[ptrops, ranges/ptr_arith],
+  stew/ptrops,
   async_backend
 
 export

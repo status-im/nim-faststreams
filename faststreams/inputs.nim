@@ -1,6 +1,6 @@
 import
   os, memfiles, options,
-  stew/[ptrops, ranges/ptr_arith],
+  stew/[ptrops],
   async_backend, buffers
 
 export
