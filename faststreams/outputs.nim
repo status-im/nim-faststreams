@@ -8,7 +8,7 @@
 
 import
   deques, typetraits,
-  stew/[ptrops, strings, ranges/ptr_arith],
+  stew/[ptrops, strings],
   buffers, async_backend
 
 export

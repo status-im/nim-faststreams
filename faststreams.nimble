@@ -9,41 +9,30 @@ skipDirs      = @["tests"]
 
 requires "nim >= 1.2.0",
          "stew",
-         "testutils",
          "chronos",
          "unittest2"
 
-### Helper functions
-proc test(args, path: string) =
-  # Compilation language is controlled by TEST_LANG
-  let lang = getEnv("TEST_LANG", "c")
+let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
+let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
+let flags = getEnv("NIMFLAGS", "") # Extra flags for the compiler
+let verbose = getEnv("V", "") notin ["", "0"]
 
-  # nnkArglist was changed to nnkArgList, so can't always use --styleCheck:error
-  # https://github.com/nim-lang/Nim/pull/17529
-  # https://github.com/nim-lang/Nim/pull/19822
-  let styleCheckStyle =
-    if (NimMajor, NimMinor) < (1, 6):
-      "hint"
-    else:
-      "error"
+let styleCheckStyle = if (NimMajor, NimMinor) < (1, 6): "hint" else: "error"
+let cfg =
+  " --styleCheck:usages --styleCheck:" & styleCheckStyle &
+  (if verbose: "" else: " --verbosity:0 --hints:off") &
+  " --skipParentCfg --skipUserCfg --outdir:build --nimcache:build/nimcache -f"
 
-  var common_args = "-r -f " & getEnv("NIMFLAGS") &  " --hints:off --styleCheck:usages --styleCheck:" & styleCheckStyle
+proc build(args, path: string) =
+  exec nimc & " " & lang & " " & cfg & " " & flags & " " & args & " " & path
 
-  if getEnv("NIMBUS_ENV_DIR") != "":
-    common_args &= " --skipParentCfg"
-
-  exec "nim " & lang & " " & args &
-    " -d:asyncBackend=none " & common_args & " " & path
-  exec "nim " & lang & " " & args &
-    " -d:asyncBackend=chronos " & common_args & " " & path
-  # TODO std backend is broken / untested
-  # exec "nim " & lang & " " & args &
-  #  " -d:asyncBackend=asyncdispatch " & common_args & " " & path
+proc run(args, path: string) =
+  build args & " -r", path
 
 task test, "Run all tests":
-  test "-d:debug   --threads:off", "tests/all_tests"
-  test "-d:release --threads:off", "tests/all_tests"
-  test "-d:danger  --threads:off", "tests/all_tests"
-  test "-d:debug   --threads:on", "tests/all_tests"
-  test "-d:release --threads:on", "tests/all_tests"
-  test "-d:danger  --threads:on", "tests/all_tests"
+  # TODO asyncdispatch backend is broken / untested
+  for backend in ["-d:asyncBackend=none", "-d:asyncBackend=chronos"]:
+    for threads in ["--threads:off", "--threads:on"]:
+      for mode in ["-d:debug", "-d:release", "-d:danger"]:
+        run backend & " " & threads & " " & mode, "tests/all_tests"
+
