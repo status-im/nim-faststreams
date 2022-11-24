@@ -181,9 +181,11 @@ suite "output stream":
   test "delayed write":
     output "initial output\n"
     const delayedWriteContent = bytes "delayed write\n"
+    let memStream2 = memoryOutput()
 
     var memCursor = memStream.delayFixedSizeWrite(delayedWriteContent.len)
     var fileCursor = fileStream.delayVarSizeWrite(delayedWriteContent.len + 50)
+    var memCursor2 = memStream2.delayVarSizeWrite(10)
 
     let cursorStart = memStream.pos
 
@@ -197,6 +199,7 @@ suite "output stream":
 
     memCursor.finalWrite delayedWriteContent
     fileCursor.finalWrite delayedWriteContent
+    memCursor2.finalWrite []
 
     checkOutputsMatch(skipUnbufferedFile = true)
 

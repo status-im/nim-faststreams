@@ -532,7 +532,7 @@ proc finalize*(cursor: var WriteCursor) =
 
 proc finalWrite*(cursor: var WriteCursor, data: openArray[byte]) =
   fsAssert data.len == cursor.span.len
-  copyMem(cursor.span.startAddr, unsafeAddr data[0], data.len)
+  copyMem(cursor.span.startAddr, baseAddr(data), data.len)
   finalize cursor
 
 proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
@@ -548,14 +548,14 @@ proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
     if cursor.span.startAddr == baseAddr:
       # This is page starting cursor
       page.consumedTo = overestimatedBytes
-      copyMem(offset(baseAddr, overestimatedBytes), unsafeAddr data[0], data.len)
+      copyMem(offset(baseAddr, overestimatedBytes), baseAddr(data), data.len)
       finalize cursor
       return
 
     if page.readableEnd == cursor.span.endAddr:
       # This is a page ending cursor
       page.writtenTo = distance(baseAddr, cursor.span.startAddr) + data.len
-      copyMem(cursor.span.startAddr, unsafeAddr data[0], data.len)
+      copyMem(cursor.span.startAddr, baseAddr(data), data.len)
       finalize cursor
       return
 
@@ -671,7 +671,7 @@ template write*(s: OutputStream|var WriteCursor, x: char) =
 proc writeToANewPage(s: OutputStream, bytes: openArray[byte]) =
   var
     runway = s.span.len
-    inputPos = unsafeAddr bytes[0]
+    inputPos = baseAddr(bytes)
     inputLen = bytes.len
 
   template reduceInput(delta: int) =
@@ -704,7 +704,7 @@ template writeBytesImpl(s: OutputStream,
   # page is full:
   let runway = s.span.len
   if inputLen <= runway:
-    copyMem(s.span.startAddr, unsafeAddr bytes[0], inputLen)
+    copyMem(s.span.startAddr, baseAddr(bytes), inputLen)
     s.span.startAddr = offset(s.span.startAddr, inputLen)
   elif s.vtable == nil or s.extCursorsCount > 0:
     # We are not ready to flush, so we must create pending pages.
@@ -716,7 +716,7 @@ template writeBytesImpl(s: OutputStream,
 
 proc write*(s: OutputStream, bytes: openArray[byte]) =
   writeBytesImpl(s, bytes):
-    drainAllBuffersSync(s, unsafeAddr bytes[0], bytes.len)
+    drainAllBuffersSync(s, baseAddr(bytes), bytes.len)
 
 proc write*(s: OutputStream, chars: openArray[char]) =
   write s, charsToBytes(chars)
@@ -742,7 +742,7 @@ when fsAsyncSupport:
                           bytes: openArray[byte]): Future[void] =
     let s = sp
     writeBytesImpl(s, bytes):
-      return s.vtable.writeAsync(s, unsafeAddr bytes[0], bytes.len)
+      return s.vtable.writeAsync(s, baseAddr(bytes), bytes.len)
 
   proc writeBytesAsyncImpl(s: OutputStream,
                           chars: openArray[char]): Future[void] =
@@ -774,7 +774,7 @@ when fsAsyncSupport:
 proc writeBytesToCursor(c: var WriteCursor, bytes: openArray[byte]) =
   var
     runway = c.span.len
-    inputPos = unsafeAddr bytes[0]
+    inputPos = baseAddr(bytes)
     inputLen = bytes.len
 
   template reduceInput(delta: int) =
@@ -787,7 +787,7 @@ proc writeBytesToCursor(c: var WriteCursor, bytes: openArray[byte]) =
   else:
     # This must be a split cursor. We need to complete its first page first,
     # then switch to the second and continue the write there.
-    copyMem(c.span.startAddr, unsafeAddr bytes[0], runway)
+    copyMem(c.span.startAddr, baseAddr(bytes), runway)
     reduceInput runway
     # If this really is a split cursor, the following operation will succeed.
     # Otherwise, it will Defect and the conclusion is that this was a write
@@ -805,8 +805,7 @@ template write*(c: var WriteCursor, bytes: openArray[byte]) =
   writeBytesToCursor(c, bytes)
 
 proc write*(c: var WriteCursor, chars: openArray[char]) {.inline.} =
-  var charsStart = unsafeAddr chars[0]
-  writeBytesToCursor(c, makeOpenArray(cast[ptr byte](charsStart), chars.len))
+  writeBytesToCursor(c, chars.toOpenArrayByte(0, chars.len - 1))
 
 proc writeMemCopy*[T](c: var WriteCursor, value: T) =
   writeBytesToCursor(c, memCopyToBytes(value))
