@@ -20,7 +20,7 @@ when sizeof(int) == sizeof(int64):
     PromotedUintTypes = uint8|uint16|uint32
 else:
   type
-    CompiledIntTypes = int|int64
+    CompiledIntTypes = int
     PromotedIntTypes = int8|int16
     CompiledUIntTypes = uint|uint64
     PromotedUintTypes = uint8|uint16
