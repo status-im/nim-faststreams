@@ -20,9 +20,9 @@ when sizeof(int) == sizeof(int64):
     PromotedUintTypes = uint8|uint16|uint32
 else:
   type
-    CompiledIntTypes = int|int64
+    CompiledIntTypes = int32|int64
     PromotedIntTypes = int8|int16
-    CompiledUIntTypes = uint|uint64
+    CompiledUIntTypes = uint32|uint64
     PromotedUintTypes = uint8|uint16
 
 # The following code implements writing numbers to a stream without going
