@@ -9,7 +9,6 @@ skipDirs      = @["tests"]
 
 requires "nim >= 1.2.0",
          "stew",
-         "chronos",
          "unittest2"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
@@ -31,7 +30,8 @@ proc run(args, path: string) =
 
 task test, "Run all tests":
   # TODO asyncdispatch backend is broken / untested
-  for backend in ["-d:asyncBackend=none", "-d:asyncBackend=chronos"]:
+  # TODO chronos backend uses nested waitFor which is not supported
+  for backend in ["-d:asyncBackend=none"]:
     for threads in ["--threads:off", "--threads:on"]:
       for mode in ["-d:debug", "-d:release", "-d:danger"]:
         run backend & " " & threads & " " & mode, "tests/all_tests"
