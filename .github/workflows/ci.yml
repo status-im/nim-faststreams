@@ -156,6 +156,10 @@ jobs:
           nim --version
           nimble --version
           nimble install -y --depsOnly
-          rm -f nimble.lock
+
           env NIMLANG=c nimble test
           env NIMLANG=cpp nimble test
+
+          nimble install chronos
+          env NIMLANG=c nimble testChronos || true
+          env NIMLANG=cpp nimble testChronos || true

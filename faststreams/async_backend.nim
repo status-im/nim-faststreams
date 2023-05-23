@@ -20,6 +20,8 @@ const
 when asyncBackend == "none":
   discard
 elif asyncBackend == "chronos":
+  {.warning: "chronos backend uses nested calls to `waitFor` which is not supported by chronos - it is not recommended to use it until this has been resolved".}
+
   import
     chronos
 
@@ -30,6 +32,8 @@ elif asyncBackend == "chronos":
     await f
 
 elif asyncBackend == "asyncdispatch":
+  {.warning: "asyncdispatch backend currently fails tests - it may or may not work as expected".}
+
   import
     std/asyncdispatch
 
