@@ -36,3 +36,9 @@ task test, "Run all tests":
       for mode in ["-d:debug", "-d:release", "-d:danger"]:
         run backend & " " & threads & " " & mode, "tests/all_tests"
 
+task testChronos, "Run chronos tests":
+  # TODO chronos backend uses nested waitFor which is not supported
+  for backend in ["-d:asyncBackend=chronos"]:
+    for threads in ["--threads:off", "--threads:on"]:
+      for mode in ["-d:debug", "-d:release", "-d:danger"]:
+        run backend & " " & threads & " " & mode, "tests/all_tests"
