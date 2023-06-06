@@ -526,41 +526,6 @@ proc advance*(s: OutputStream, bytesWrittenToWritableSpan: Natural) =
   fsAssert bytesWrittenToWritableSpan <= s.span.len
   s.span.startAddr = offset(s.span.startAddr, bytesWrittenToWritableSpan)
 
-proc finalize*(cursor: var WriteCursor) =
-  fsAssert cursor.stream.extCursorsCount > 0
-  dec cursor.stream.extCursorsCount
-
-proc finalWrite*(cursor: var WriteCursor, data: openArray[byte]) =
-  fsAssert data.len == cursor.span.len
-  copyMem(cursor.span.startAddr, baseAddr(data), data.len)
-  finalize cursor
-
-proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
-  template cursor: auto = WriteCursor(c)
-
-  let overestimatedBytes = cursor.span.len - data.len
-  fsAssert overestimatedBytes >= 0
-
-  WriteCursor(c).stream.spanEndPos -= overestimatedBytes
-
-  for page in items(cursor.stream.buffers.queue):
-    let baseAddr = page.allocationStart
-    if cursor.span.startAddr == baseAddr:
-      # This is page starting cursor
-      page.consumedTo = overestimatedBytes
-      copyMem(offset(baseAddr, overestimatedBytes), baseAddr(data), data.len)
-      finalize cursor
-      return
-
-    if page.readableEnd == cursor.span.endAddr:
-      # This is a page ending cursor
-      page.writtenTo = distance(baseAddr, cursor.span.startAddr) + data.len
-      copyMem(cursor.span.startAddr, baseAddr(data), data.len)
-      finalize cursor
-      return
-
-  fsAssert false
-
 proc tryMovingToNextPage(c: var WriteCursor) =
   # A split cursor is a fixed-size cursor that ended up on page boundary.
   #
@@ -812,6 +777,41 @@ proc writeMemCopy*[T](c: var WriteCursor, value: T) =
 
 proc write*(c: var WriteCursor, str: string) =
   writeBytesToCursor(c, str.toOpenArrayByte(0, str.len - 1))
+
+proc finalize*(cursor: var WriteCursor) =
+  fsAssert cursor.stream.extCursorsCount > 0
+  dec cursor.stream.extCursorsCount
+
+proc finalWrite*(cursor: var WriteCursor, data: openArray[byte]) =
+  cursor.writeBytesToCursor(data)
+  fsAssert cursor.span.len == 0
+  finalize cursor
+
+proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
+  template cursor: auto = WriteCursor(c)
+
+  let overestimatedBytes = cursor.span.len - data.len
+  fsAssert overestimatedBytes >= 0
+
+  WriteCursor(c).stream.spanEndPos -= overestimatedBytes
+
+  for page in items(cursor.stream.buffers.queue):
+    let baseAddr = page.allocationStart
+    if cursor.span.startAddr == baseAddr:
+      # This is page starting cursor
+      page.consumedTo = overestimatedBytes
+      copyMem(offset(baseAddr, overestimatedBytes), baseAddr(data), data.len)
+      finalize cursor
+      return
+
+    if page.readableEnd == cursor.span.endAddr:
+      # This is a page ending cursor
+      page.writtenTo = distance(baseAddr, cursor.span.startAddr) + data.len
+      copyMem(cursor.span.startAddr, baseAddr(data), data.len)
+      finalize cursor
+      return
+
+  fsAssert false
 
 type
   OutputConsumingProc = proc (data: openArray[byte])

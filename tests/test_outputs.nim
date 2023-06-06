@@ -3,7 +3,7 @@
 import
   os, unittest2, random, strformat,
   stew/ptrops,
-  ../faststreams, ../faststreams/textio
+  ../faststreams, ../faststreams/buffers, ../faststreams/textio
 
 proc bytes(s: string): seq[byte] =
   result = newSeqOfCap[byte](s.len)
@@ -200,6 +200,36 @@ suite "output stream":
     memCursor.finalWrite delayedWriteContent
     fileCursor.finalWrite delayedWriteContent
     memCursor2.finalWrite []
+
+    checkOutputsMatch(skipUnbufferedFile = true)
+
+  test "delayed write (edge cases)":
+    const delayedWriteContent = bytes "delayed write\n"
+    check memStream.s.span.len == 0
+    var
+      memCursor1 = memStream.delayFixedSizeWrite(delayedWriteContent.len)
+      fileCursor1 = fileStream.delayFixedSizeWrite(delayedWriteContent.len)
+    undelayedOutput delayedWriteContent
+    output "some output\n"
+    check memStream.s.span.len >= delayedWriteContent.len
+    var
+      memCursor2 = memStream.delayFixedSizeWrite(delayedWriteContent.len)
+      fileCursor2 = fileStream.delayFixedSizeWrite(delayedWriteContent.len)
+    undelayedOutput delayedWriteContent
+    check memStream.s.span.len >= delayedWriteContent.len
+    let numContentBytes = memStream.s.span.len - delayedWriteContent.len + 1
+    output repeat(byte(42), numContentBytes)
+    var
+      memCursor3 = memStream.delayFixedSizeWrite(delayedWriteContent.len)
+      fileCursor3 = fileStream.delayFixedSizeWrite(delayedWriteContent.len)
+    undelayedOutput delayedWriteContent
+
+    memCursor1.finalWrite delayedWriteContent
+    memCursor2.finalWrite delayedWriteContent
+    memCursor3.finalWrite delayedWriteContent
+    fileCursor1.finalWrite delayedWriteContent
+    fileCursor2.finalWrite delayedWriteContent
+    fileCursor3.finalWrite delayedWriteContent
 
     checkOutputsMatch(skipUnbufferedFile = true)
 
