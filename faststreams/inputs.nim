@@ -911,8 +911,12 @@ template readNImpl(sp: InputStream,
 
   # This defines the `allocMem` operation used below.
   # See `useHeapMem` and `useStackMem` for the possible definitions.
-  # If this is placed in a block ARC and ORC memory managers free it
-  # and create a resulting use-after-free.
+  #
+  # If the "var buffer" from `useHeapMem` or `useStackMem` is in the
+  # `block`, the ARC and ORC memory managers free it, when the block
+  # scope ends. The default approach, without -d:useMalloc, tends to
+  # obscure the resulting use-after-free which only means it becomes
+  # slightly rarer and less predictable.
   createAllocMemOp(np)
 
   block:
