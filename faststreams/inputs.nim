@@ -875,15 +875,24 @@ when fsAsyncSupport:
 template useHeapMem(_: Natural) =
   var buffer: seq[byte]
 
-  template allocMem(n: Natural): ptr byte =
-    buffer.setLen(n)
-    addr buffer[0]
+  when (NimMajor, NimMinor) > (1, 6):
+    template allocMem(n: Natural): ptr byte {.redefine.} =
+      buffer.setLen(n)
+      addr buffer[0]
+  else:
+    template allocMem(n: Natural): ptr byte =
+      buffer.setLen(n)
+      addr buffer[0]
 
 template useStackMem(n: static Natural) =
   var buffer: array[n + 1, byte]
 
-  template allocMem(_: Natural): ptr byte =
-    addr buffer[0]
+  when (NimMajor, NimMinor) > (1, 6):
+    template allocMem(_: Natural): ptr byte {.redefine.} =
+      addr buffer[0]
+  else:
+    template allocMem(_: Natural): ptr byte =
+      addr buffer[0]
 
 template readNImpl(sp: InputStream,
                    np: Natural,
@@ -900,14 +909,17 @@ template readNImpl(sp: InputStream,
   # an `openArray` from the existing span.
   var startAddr: ptr byte
 
-  block:
-    # This defines the `allocMem` operation used below.
-    # See `useHeapMem` and `useStackMem` for the possible definitions.
-    # We are creating a block scope in order to allow multiple usages
-    # of `read` within a single scope (avoiding duplicate definitions
-    # of `allocMem`)
-    createAllocMemOp(np)
+  # This defines the `allocMem` operation used below.
+  # See `useHeapMem` and `useStackMem` for the possible definitions.
+  #
+  # If the "var buffer" from `useHeapMem` or `useStackMem` is in the
+  # `block`, the ARC and ORC memory managers free it, when the block
+  # scope ends. The default approach, without -d:useMalloc, tends to
+  # obscure the resulting use-after-free which only means it becomes
+  # slightly rarer and less predictable.
+  createAllocMemOp(np)
 
+  block:
     if n > runway:
       startAddr = allocMem(n)
       let drained {.used.} = drainBuffersInto(s, startAddr, n)
