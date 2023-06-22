@@ -737,6 +737,19 @@ when fsAsyncSupport:
     writeAndWait(sp, memCopyToBytes(value))
 
 proc writeBytesToCursor(c: var WriteCursor, bytes: openArray[byte]) =
+  # Nim represents a zero-length openArray as a (NULL, 0) base+length tuple.
+  #
+  # https://gcc.gnu.org/gcc-4.9/porting_to.html
+  # "The pointers passed to memmove (and similar functions in <string.h>) must
+  # be non-null even when nbytes==0, so GCC can use that information to remove
+  # the check after the memmove call."
+  #
+  # https://en.cppreference.com/w/cpp/string/byte/memcpy
+  # "If either dest or src is an invalid or null pointer, the behavior is
+  # undefined, even if count is zero."
+  if bytes.len == 0:
+    return
+
   var
     runway = c.span.len
     inputPos = baseAddr(bytes)
@@ -788,6 +801,19 @@ proc finalWrite*(cursor: var WriteCursor, data: openArray[byte]) =
   finalize cursor
 
 proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
+  # Nim represents a zero-length openArray as a (NULL, 0) base+length tuple.
+  #
+  # https://gcc.gnu.org/gcc-4.9/porting_to.html
+  # "The pointers passed to memmove (and similar functions in <string.h>) must
+  # be non-null even when nbytes==0, so GCC can use that information to remove
+  # the check after the memmove call."
+  #
+  # https://en.cppreference.com/w/cpp/string/byte/memcpy
+  # "If either dest or src is an invalid or null pointer, the behavior is
+  # undefined, even if count is zero."
+  if data.len == 0:
+    return
+
   template cursor: auto = WriteCursor(c)
 
   let overestimatedBytes = cursor.span.len - data.len
