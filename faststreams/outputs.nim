@@ -737,6 +737,8 @@ when fsAsyncSupport:
     writeAndWait(sp, memCopyToBytes(value))
 
 proc writeBytesToCursor(c: var WriteCursor, bytes: openArray[byte]) =
+  # https://github.com/nim-lang/Nim/issues/22149
+  #
   # Nim represents a zero-length openArray as a (NULL, 0) base+length tuple.
   #
   # https://gcc.gnu.org/gcc-4.9/porting_to.html
