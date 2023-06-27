@@ -114,6 +114,25 @@ suite "input stream":
             fileContents.add input.read.char
           break
 
+      elif r < 60:
+        # Test the ability to call readable() and read() multiple times from
+        # the same scope.
+        let readSize = 6 + rand(10)
+
+        if input.readable(readSize):
+          fileContents.add input.read(readSize).str
+        else:
+          while input.readable:
+            fileContents.add input.read.char
+          break
+
+        if input.readable(readSize):
+          fileContents.add input.read(readSize).str
+        else:
+          while input.readable:
+            fileContents.add input.read.char
+          break
+
       else:
         if input.readable:
           fileContents.add input.read.char
