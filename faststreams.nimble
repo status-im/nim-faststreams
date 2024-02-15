@@ -17,7 +17,7 @@ let flags = getEnv("NIMFLAGS", "") # Extra flags for the compiler
 let verbose = getEnv("V", "") notin ["", "0"]
 
 let cfg =
-  " --passC=\"-fsanitize=undefined\" --passL=\"-fsanitize=undefined\"--styleCheck:usages --styleCheck:error" &
+  " --passC=\"-fsanitize=undefined\" --passL=\"-fsanitize=undefined\" --styleCheck:usages --styleCheck:error" &
   (if verbose: "" else: " --verbosity:0") &
   " --skipParentCfg --skipUserCfg --outdir:build --nimcache:build/nimcache -f"
 
