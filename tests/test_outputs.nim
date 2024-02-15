@@ -267,7 +267,7 @@ suite "randomized tests":
 
   proc randomizedCursorsTestImpl(stream: OutputStream,
                                  seed = 1000,
-                                 iterations = 1000,
+                                 iterations = 10000,
                                  minWriteSize = 500,
                                  maxWriteSize = 1000,
                                  writeTypes = Mixed,
