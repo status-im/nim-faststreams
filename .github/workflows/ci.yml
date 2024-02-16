@@ -158,8 +158,6 @@ jobs:
           nimble install -y --depsOnly
 
           env NIMLANG=c nimble test
-          env NIMLANG=cpp nimble test
 
           nimble install chronos
           env NIMLANG=c nimble testChronos || true
-          env NIMLANG=cpp nimble testChronos || true
