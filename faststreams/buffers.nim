@@ -13,7 +13,7 @@ type
   Page* = object
     consumedTo*: int
     writtenTo*: Natural
-    data*: ref string
+    data*: ref seq[byte]
 
   PageRef* = ref Page
 
@@ -48,7 +48,7 @@ when debugHelpers:
       debugEcho "  start = ", page.consumedTo
       debugEcho "  written to = ", page.writtenTo
 
-  func contents*(buffers: PageBuffers): string =
+  func contents*(buffers: PageBuffers): seq[byte] =
     for page in buffers.queue:
       result.add page.data[][page.consumedTo ..< page.writtenTo - 1]
 else:
@@ -56,27 +56,34 @@ else:
     discard
 
 func openArrayToPair*(a: var openArray[byte]): (ptr byte, Natural) =
-  (addr a[0], Natural(a.len))
+  if a.len > 0:
+    (addr a[0], Natural(a.len))
+  else:
+    (nil, 0)
 
 template allocationStart*(page: PageRef): ptr byte =
-  cast[ptr byte](addr page.data[][0])
+  baseAddr page.data[]
 
 func readableStart*(page: PageRef): ptr byte =
-  offset(cast[ptr byte](addr page.data[][0]), page.consumedTo)
+  offset(page.allocationStart(), page.consumedTo)
 
 func readableEnd*(page: PageRef): ptr byte =
-  offset(cast[ptr byte](addr page.data[][0]), page.writtenTo)
+  offset(page.allocationStart(), page.writtenTo)
 
 template writableStart*(page: PageRef): ptr byte =
   readableEnd(page)
 
 func allocationEnd*(page: PageRef): ptr byte =
-  offset(cast[ptr byte](addr page.data[][0]), page.data[].len)
+  offset(page.allocationStart(), page.data[].len)
 
 func pageLen*(page: PageRef): Natural =
   page.writtenTo - page.consumedTo
 
-template pageChars*(page: PageRef): untyped =
+template pageBytes*(page: PageRef): openArray[byte] =
+  let baseAddr = cast[ptr UncheckedArray[byte]](allocationStart(page))
+  toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
+
+template pageChars*(page: PageRef): openArray[char] =
   let baseAddr = cast[ptr UncheckedArray[char]](allocationStart(page))
   toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
@@ -153,7 +160,7 @@ proc restoreEof*(buffers: PageBuffers, pos: Natural) =
   buffers.fauxEofPos = pos
 
 template allocWritablePage*(pageSize: Natural, writtenToParam: Natural = 0): auto =
-  PageRef(data: allocRef newString(pageSize),
+  PageRef(data: allocRef newSeqUninitialized[byte](pageSize),
           writtenTo: writtenToParam)
 
 func addWritablePage*(buffers: PageBuffers, pageSize: Natural): PageRef =
@@ -177,9 +184,10 @@ template getWritableSpan*(buffers: PageBuffers): PageSpan =
   let page = getWritablePage(buffers, buffers.pageSize)
   writableSpan(page)
 
-func stringFromBytes(src: pointer, srcLen: Natural): string =
-  result = newString(srcLen)
-  copyMem(addr result[0], src, srcLen)
+func fromBytes(src: pointer, srcLen: Natural): seq[byte] =
+  result = newSeqUninitialized[byte](srcLen)
+  if srcLen > 0:
+    copyMem(baseAddr result, src, srcLen)
 
 func nextAlignedSize*(minSize, pageSize: Natural): Natural =
   # TODO: This is not perfectly accurate. Revisit later
@@ -187,9 +195,12 @@ func nextAlignedSize*(minSize, pageSize: Natural): Natural =
 
 func appendUnbufferedWrite*(buffers: PageBuffers,
                             src: pointer, srcLen: Natural) =
+  if srcLen == 0:
+    return
+
   if buffers.queue.len == 0:
     buffers.queue.addLast PageRef(
-      data: allocRef stringFromBytes(src, srcLen),
+      data: allocRef fromBytes(src, srcLen),
       writtenTo: srcLen)
   else:
     var
@@ -200,7 +211,7 @@ func appendUnbufferedWrite*(buffers: PageBuffers,
       unusedBytes = lastPageLen - lastPage.writtenTo
 
     if unusedBytes > 0:
-      let unusedBytesStart = offset(addr lastPage.data[0], lastPage.writtenTo)
+      let unusedBytesStart = lastPage.writableStart()
       if unusedBytes >= srcLen:
         copyMem(unusedBytesStart, src, srcLen)
         lastPage.writtenTo += srcLen
@@ -214,7 +225,7 @@ func appendUnbufferedWrite*(buffers: PageBuffers,
     let nextPageSize = nextAlignedSize(srcLen, buffers.pageSize)
     let nextPage = buffers.addWritablePage(nextPageSize)
 
-    copyMem(addr nextPage.data[0], src, srcLen)
+    copyMem(nextPage.writableStart(), src, srcLen)
     nextPage.writtenTo = srcLen
 
 template hasDelayedWritesAtPageStart(page: PageRef): bool =
@@ -246,13 +257,14 @@ func ensureRunway*(buffers: PageBuffers,
                                         currentHeadPos.startAddr)
       replacementPageSize = neededRunway + bytesWrittenToCurrPage
 
-    currPage.data = allocRef newString(replacementPageSize)
+    currPage.data = allocRef newSeqUninitialized[byte](replacementPageSize)
     currPage.consumedTo = bytesWrittenToCurrPage
     currPage.writtenTo = bytesWrittenToCurrPage
 
     # We copy the old data over the new page
-    copyMem(addr currPage.data[][0], addr oldData[][0],
-            bytesWrittenToCurrPage)
+    if bytesWrittenToCurrPage > 0:
+      copyMem(baseAddr currPage.data[], baseAddr oldData[],
+              bytesWrittenToCurrPage)
 
     currentHeadPos = currPage.writableSpan
 

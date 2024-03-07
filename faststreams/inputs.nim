@@ -835,9 +835,12 @@ proc readIntoEx*(s: InputStream, dst: var openArray[byte]): int =
   ## written to the buffer. The function will return a
   ## number smaller than the buffer length only if EOF
   ## was reached before the buffer was fully populated.
-  let dstAddr = addr dst[0]
-  let dstLen = dst.len
-  readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
+  if dst.len > 0:
+    let dstAddr = baseAddr dst
+    let dstLen = dst.len
+    readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
+  else:
+    0
 
 proc readInto*(s: InputStream, target: var openArray[byte]): bool =
   ## Read data into the destination buffer.
@@ -903,7 +906,7 @@ template readNImpl(sp: InputStream,
     if n > runway:
       when memAllocType == MemAllocType.HeapMem:
         buffer.setLen(n)
-      startAddr = addr buffer[0]
+      startAddr = baseAddr buffer
       let drained {.used.} = drainBuffersInto(s, startAddr, n)
       fsAssert drained == n
     else:

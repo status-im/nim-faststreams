@@ -914,6 +914,19 @@ proc getOutput*(s: OutputStream, T: type string): string =
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
   s.buffers.trackWrittenTo s.span.startAddr
 
+  result = newStringOfCap(s.pos)
+  for page in items(s.buffers.queue):
+    result.add page.pageChars
+
+proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
+  ## Please note that calling `getOutput` on an unbuffered stream
+  ## or an unsafe memory stream is considered a Defect.
+  ##
+  ## Before consuming the output, all outstanding delayed writes must be finalized.
+  ##
+  fsAssert s.extCursorsCount == 0 and s.buffers != nil
+  s.buffers.trackWrittenTo s.span.startAddr
+
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
     if page.consumedTo == 0:
@@ -924,15 +937,14 @@ proc getOutput*(s: OutputStream, T: type string): string =
       s.buffers.queue.clear()
       return
 
-  result = newStringOfCap(s.pos)
+  result = newSeqUninitialized[byte](s.pos)
+  var pos = 0
   for page in items(s.buffers.queue):
-    result.add page.pageChars
-
-template getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
-  cast[seq[byte]](s.getOutput(string))
+    result[pos..<pos+page.pageBytes().len] = page.pageBytes()
+    pos += page.pageBytes.len()
 
 template getOutput*(s: OutputStream): seq[byte] =
-  cast[seq[byte]](s.getOutput(string))
+  s.getOutput(seq[byte])
 
 when fsAsyncSupport:
   template getOutput*(s: AsyncOutputStream): seq[byte] =
