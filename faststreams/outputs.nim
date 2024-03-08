@@ -434,7 +434,8 @@ proc delayFixedSizeWrite*(s: OutputStream, cursorSize: Natural): WriteCursor =
 
     s.spanEndPos += nextPageSize
 
-proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
+proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor {.
+    deprecated: "missing test coverage in combination with ensureRunway".} =
   ## Please note that using variable sized writes are not supported
   ## for unbuffered streams and unsafe memory inputs.
   fsAssert s.buffers != nil
@@ -646,7 +647,6 @@ proc writeToANewPage(s: OutputStream, bytes: openArray[byte]) =
   if runway > 0:
     copyMem(s.span.startAddr, inputPos, runway)
     reduceInput runway
-
   fsAssert s.buffers != nil
 
   let nextPageSize = nextAlignedSize(inputLen, s.buffers.pageSize)
@@ -940,8 +940,9 @@ proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   result = newSeqUninitialized[byte](s.pos)
   var pos = 0
   for page in items(s.buffers.queue):
-    result[pos..<pos+page.pageBytes().len] = page.pageBytes()
-    pos += page.pageBytes.len()
+    let pageLen = page.pageLen()
+    copyMem(addr result[pos], page.readableStart(), pageLen)
+    pos += pageLen
 
 template getOutput*(s: OutputStream): seq[byte] =
   s.getOutput(seq[byte])
