@@ -458,3 +458,37 @@ suite "randomized tests":
       check:
         res[j..<j+i] == buffer[0..<i]
       j += i
+
+  test "ensureRunway with delayFixedSizeWrite":
+    var output = memoryOutput()
+
+    const writes = 256
+    var buffer = newSeq[byte](writes)
+    let totalBytes = block:
+      var tmp = 0
+      for i in 0..<writes:
+        tmp += i
+        buffer[i] = byte(i)
+      tmp
+
+    var cursor = output.delayFixedSizeWrite(8)
+
+    output.ensureRunway(totalBytes)
+
+    for i in 0..<writes:
+      output.write(buffer.toOpenArray(0, i - 1))
+
+    const data = [byte 1, 2, 3, 4, 5, 6, 7, 8]
+    cursor.finalWrite data
+
+    output.flush()
+
+    let res = output.getOutput()
+    var j = 8
+    for i in 0..<writes:
+      check:
+        res[j..<j+i] == buffer[0..<i]
+      j += i
+
+    check:
+      res[0..<data.len] == data

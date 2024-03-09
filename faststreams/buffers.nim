@@ -228,45 +228,28 @@ func appendUnbufferedWrite*(buffers: PageBuffers,
     copyMem(nextPage.writableStart(), src, srcLen)
     nextPage.writtenTo = srcLen
 
-template hasDelayedWritesAtPageStart(page: PageRef): bool =
-  page.consumedTo < 0
-
 func ensureRunway*(buffers: PageBuffers,
                    currentHeadPos: var PageSpan,
                    neededRunway: Natural) =
-  if currentHeadPos.startAddr == nil:
-    # This is a brand new stream, just like we recomend.
-    let page = buffers.addWritablePage(neededRunway)
-    currentHeadPos = page.fullSpan
-  else:
-    # This is a more complicated path that should almost never
-    # trigger in practice in a typically implemented code that
-    # calls `ensureRunway` at the beggining of a transformation.
-    fsAssert buffers.queue.len > 0
-    let currPage = buffers.queue.peekLast
+  # End writing to the current buffer (if any) and create a new one of the given
+  # length
+  let page =
+    if currentHeadPos.startAddr == nil:
+      # This is a brand new stream, just like we recomend.
+      buffers.addWritablePage(neededRunway)
+    else:
+      # Create a new buffer for the desired runway, ending the current buffer
+      # potentially without using its entire space because existing write
+      # cursors may point to the memory inside it.
+      # In git history, one can find code that moves data from the existing page
+      # data to the new buffer - this is not a bad idea in general but breaks
+      # when write cursors are in play
+      trackWrittenTo(buffers, currentHeadPos.startAddr)
+      let page = allocWritablePage(neededRunway)
+      buffers.queue.addLast page
+      page
 
-    if currPage.hasDelayedWritesAtPageStart:
-      # There is not much we can do here. The outstanding cursors
-      # may point to the current page. We won't honor the runway
-      # request.
-      return
-
-    let
-      oldData = currPage.data
-      bytesWrittenToCurrPage = distance(currPage.readableStart,
-                                        currentHeadPos.startAddr)
-      replacementPageSize = neededRunway + bytesWrittenToCurrPage
-
-    currPage.data = allocRef newSeqUninitialized[byte](replacementPageSize)
-    currPage.consumedTo = bytesWrittenToCurrPage
-    currPage.writtenTo = bytesWrittenToCurrPage
-
-    # We copy the old data over the new page
-    if bytesWrittenToCurrPage > 0:
-      copyMem(baseAddr currPage.data[], baseAddr oldData[],
-              bytesWrittenToCurrPage)
-
-    currentHeadPos = currPage.writableSpan
+  currentHeadPos = page.fullSpan
 
 template len*(buffers: PageBuffers): Natural =
   buffers.queue.len
