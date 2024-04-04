@@ -121,8 +121,7 @@ when fsAsyncSupport:
     preventFurtherReading InputStream(s)
 
 template makeHandle*(sp: InputStream): InputStreamHandle =
-  let s = sp
-  InputStreamHandle(s: s)
+  InputStreamHandle(s: sp)
 
 proc close*(s: InputStream,
             behavior = dontWaitAsyncClose)
@@ -133,6 +132,9 @@ proc close*(s: InputStream,
   ## If the underlying input device requires asynchronous closing
   ## and `behavior` is set to `waitAsyncClose`, this proc will use
   ## `waitFor` to block until the async operation completes.
+  if s == nil:
+    return
+
   s.disconnectInputDevice()
   s.preventFurtherReading()
   when fsAsyncSupport:
@@ -147,11 +149,12 @@ when fsAsyncSupport:
   template close*(sp: AsyncInputStream) =
     ## Starts the asychronous closing of the stream and returns a future that
     ## tracks the closing operation.
-    let s = InputStream sp
-    disconnectInputDevice(s)
-    preventFurtherReading(s)
-    if s.closeFut != nil:
-      fsAwait s.closeFut
+    if sp != nil:
+      let s = InputStream sp
+      disconnectInputDevice(s)
+      preventFurtherReading(s)
+      if s.closeFut != nil:
+        fsAwait s.closeFut
 
 template closeNoWait*(sp: MaybeAsyncInputStream) =
   ## Close the stream without waiting even if's async.

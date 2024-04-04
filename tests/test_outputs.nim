@@ -492,3 +492,7 @@ suite "randomized tests":
 
     check:
       res[0..<data.len] == data
+
+  test "can close default OutputStream":
+    var v: OutputStream
+    v.close()

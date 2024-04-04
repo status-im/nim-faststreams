@@ -147,6 +147,9 @@ proc flush*(s: OutputStream) =
 proc close*(s: OutputStream,
             behavior = dontWaitAsyncClose)
            {.raises: [IOError, Defect].} =
+  if s == nil:
+    return
+
   flush s
   disconnectOutputDevice(s)
   when fsAsyncSupport:
@@ -962,12 +965,13 @@ when fsAsyncSupport:
     proc flushAsync*(s: AsyncOutputStream) {.async.} =
       flush s
 
-    template close*(sp: AsyncOutputStream) =
-      let s = OutputStream sp
-      flush(Async s)
-      disconnectOutputDevice(s)
-      if s.closeFut != nil:
-        fsAwait s.closeFut
+    proc close*(sp: AsyncOutputStream) =
+      if sp != nil:
+        let s = OutputStream sp
+        flush(Async s)
+        disconnectOutputDevice(s)
+        if s.closeFut != nil:
+          fsAwait s.closeFut
 
     proc closeAsync*(s: AsyncOutputStream) {.async.} =
       close s
