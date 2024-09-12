@@ -18,6 +18,8 @@ jobs:
         target:
           - os: linux
             cpu: amd64
+          - os: linux-gcc-14 # This is to use ubuntu 24 and install gcc 14. Should be removed when ubuntu-latest is 26.04
+            cpu: amd64
           - os: linux
             cpu: i386
           - os: macos
@@ -26,11 +28,15 @@ jobs:
             cpu: arm64
           - os: windows
             cpu: amd64
-        branch: [version-1-6, version-2-0, devel]
+        branch: [version-2-0, version-2-2, devel]
         include:
           - target:
               os: linux
             builder: ubuntu-latest
+            shell: bash
+          - target:
+              os: linux-gcc-14 # This is to use ubuntu 24 and install gcc 14. Should be removed when ubuntu-latest is 26.04
+            builder: ubuntu-24.04
             shell: bash
           - target:
               os: macos
@@ -102,7 +108,7 @@ jobs:
       - name: Restore Nim DLLs dependencies (Windows) from cache
         if: runner.os == 'Windows'
         id: windows-dlls-cache
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: external/dlls-${{ matrix.target.cpu }}
           key: 'dlls-${{ matrix.target.cpu }}'
@@ -159,10 +165,20 @@ jobs:
             bash build_nim.sh nim csources dist/nimble NimBinaries
           echo '${{ github.workspace }}/nim/bin' >> $GITHUB_PATH
 
+      - name: Use gcc 14
+        # Should be removed when ubuntu-latest is 26.04
+        if : ${{ matrix.target.os == 'linux-gcc-14' }}
+        run: |
+          # Add GCC-14 to alternatives
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 14
+          # Set GCC-14 as the default
+          sudo update-alternatives --set gcc /usr/bin/gcc-14
+
       - name: Run tests
         run: |
           nim --version
           nimble --version
+          gcc --version
           nimble install -y --depsOnly
 
           env NIMLANG=c nimble test
