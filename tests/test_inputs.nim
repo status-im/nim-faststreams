@@ -43,6 +43,9 @@ suite "input stream":
       test "next returns none":
         check input.next.isNone
 
+      test "input can be closed":
+        input.close()
+
   emptyInputTests "memoryInput":
     var input = InputStream()
 
@@ -154,6 +157,10 @@ suite "input stream":
       expect CatchableError: discard memFileInput(fileName)
 
       check not fileExists(fileName)
+
+    test "can close nil InputStream":
+      var v: InputStream
+      v.close()
 
     test "non-blocking reads":
       let s = fileInput(asciiTableFile, pageSize = 100)
