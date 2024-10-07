@@ -937,7 +937,7 @@ proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
       s.buffers.queue.clear()
       return
 
-  result = newSeqUninitialized[byte](s.pos)
+  result = newSeqUninit[byte](s.pos)
   var pos = 0
   for page in items(s.buffers.queue):
     let pageLen = page.pageLen()

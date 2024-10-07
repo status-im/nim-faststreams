@@ -160,7 +160,7 @@ proc restoreEof*(buffers: PageBuffers, pos: Natural) =
   buffers.fauxEofPos = pos
 
 template allocWritablePage*(pageSize: Natural, writtenToParam: Natural = 0): auto =
-  PageRef(data: allocRef newSeqUninitialized[byte](pageSize),
+  PageRef(data: allocRef newSeqUninit[byte](pageSize),
           writtenTo: writtenToParam)
 
 func addWritablePage*(buffers: PageBuffers, pageSize: Natural): PageRef =
@@ -185,7 +185,7 @@ template getWritableSpan*(buffers: PageBuffers): PageSpan =
   writableSpan(page)
 
 func fromBytes(src: pointer, srcLen: Natural): seq[byte] =
-  result = newSeqUninitialized[byte](srcLen)
+  result = newSeqUninit[byte](srcLen)
   if srcLen > 0:
     copyMem(baseAddr result, src, srcLen)
 
