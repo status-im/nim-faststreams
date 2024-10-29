@@ -28,7 +28,7 @@ jobs:
             cpu: arm64
           - os: windows
             cpu: amd64
-        branch: [version-2-0, version-2-2, devel]
+        branch: [version-1-6, version-2-0, version-2-2, devel]
         include:
           - target:
               os: linux

@@ -59,7 +59,7 @@ func openArrayToPair*(a: var openArray[byte]): (ptr byte, Natural) =
   if a.len > 0:
     (addr a[0], Natural(a.len))
   else:
-    (nil, 0)
+    (nil, Natural(0))
 
 template allocationStart*(page: PageRef): ptr byte =
   baseAddr page.data[]
