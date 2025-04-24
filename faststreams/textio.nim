@@ -1,7 +1,7 @@
 import
   stew/ptrops,
   inputs, outputs, buffers, async_backend, multisync,
-  system/formatfloat
+  std/formatfloat
 
 template matchingIntType(T: type int64): type = uint64
 template matchingIntType(T: type int32): type = uint32
