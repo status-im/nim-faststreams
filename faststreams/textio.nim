@@ -1,7 +1,12 @@
 import
   stew/ptrops,
-  inputs, outputs, buffers, async_backend, multisync,
-  std/formatfloat
+  inputs, outputs, buffers, async_backend, multisync
+
+when (NimMajor, NimMinor) < (2, 0):
+  import system/formatfloat
+else:
+  import std/formatfloat
+
 
 template matchingIntType(T: type int64): type = uint64
 template matchingIntType(T: type int32): type = uint32
