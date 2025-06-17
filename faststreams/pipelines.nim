@@ -4,6 +4,8 @@ import
 export
   inputs, outputs, async_backend
 
+{.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
+
 when fsAsyncSupport:
   import
     std/macros,
@@ -69,34 +71,30 @@ when fsAsyncSupport:
     complete fut
     fut
 
-  let pipeInputVTable = InputStreamVTable(
-    readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  const pipeInputVTable = InputStreamVTable(
+    readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural {.iocall.} =
       fsTranslateErrors "Failed to read from pipe":
         let ls = LayeredInputStream(s)
         fsAssert ls.allowWaitFor
         return waitFor pipeRead(ls, dst, dstLen)
     ,
     readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                    {.iocall.} =
       fsTranslateErrors "Unexpected error from the async macro":
         let ls = LayeredInputStream(s)
         return pipeRead(ls, dst, dstLen)
     ,
-    getLenSync: proc (s: InputStream): Option[Natural]
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    getLenSync: proc (s: InputStream): Option[Natural] {.iocall.} =
       let source = LayeredInputStream(s).source
       if source != nil:
         return source.len
     ,
-    closeSync: proc (s: InputStream)
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    closeSync: proc (s: InputStream) {.iocall.} =
       let source = LayeredInputStream(s).source
       if source != nil:
         close source
     ,
-    closeAsync: proc (s: InputStream): Future[void]
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    closeAsync: proc (s: InputStream): Future[void] {.iocall.} =
       fsTranslateErrors "Unexpected error from the async macro":
         let source = LayeredInputStream(s).source
         if source != nil:
@@ -105,29 +103,27 @@ when fsAsyncSupport:
           return completedFuture("pipeInput.closeAsync")
   )
 
-  let pipeOutputVTable = OutputStreamVTable(
-    writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  const pipeOutputVTable = OutputStreamVTable(
+    writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural) {.iocall.} =
       fsTranslateErrors "Failed to write all bytes to pipe":
         var ls = LayeredOutputStream(s)
         fsAssert ls.allowWaitFor
         waitFor pipeWrite(ls, src, srcLen)
     ,
     writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                    {.iocall.} =
       # TODO: The async macro is raising exceptions even when
       #       merely forwarding a future:
       fsTranslateErrors "Unexpected error from the async macro":
         return pipeWrite(LayeredOutputStream s, src, srcLen)
     ,
     flushSync: proc (s: OutputStream)
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                    {.iocall.} =
       let destination = LayeredOutputStream(s).destination
       if destination != nil:
         flush destination
     ,
-    flushAsync: proc (s: OutputStream): Future[void]
-                     {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    flushAsync: proc (s: OutputStream): Future[void] {.iocall.} =
       fsTranslateErrors "Unexpected error from the async macro":
         let destination = LayeredOutputStream(s).destination
         if destination != nil:
@@ -135,8 +131,7 @@ when fsAsyncSupport:
         else:
           return completedFuture("pipeOutput.flushAsync")
     ,
-    closeSync: proc (s: OutputStream)
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    closeSync: proc (s: OutputStream) {.iocall.} =
 
       s.buffers.eofReached = true
 
@@ -147,8 +142,7 @@ when fsAsyncSupport:
       if destination != nil:
         close destination
     ,
-    closeAsync: proc (s: OutputStream): Future[void]
-                    {.nimcall, gcsafe, raises: [IOError, Defect].} =
+    closeAsync: proc (s: OutputStream): Future[void] {.iocall.} =
       s.buffers.eofReached = true
 
       fsTranslateErrors "Unexpected error from Future.complete":

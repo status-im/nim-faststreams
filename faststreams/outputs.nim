@@ -14,6 +14,8 @@ import
 export
   initPageBuffers, CloseBehavior
 
+{.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
+
 when fsAsyncSupport:
   # Circular type refs prevent more targeted `when`
   type
@@ -29,23 +31,12 @@ when fsAsyncSupport:
 
     AsyncOutputStream* {.borrow: `.`.} = distinct OutputStream
 
-    WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    WriteAsyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    FlushSyncProc* = proc (s: OutputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    FlushAsyncProc* = proc (s: OutputStream): Future[void]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    CloseSyncProc* = proc (s: OutputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    CloseAsyncProc* = proc (s: OutputStream): Future[void]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+    WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural) {.iocall.}
+    WriteAsyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void] {.iocall.}
+    FlushSyncProc* = proc (s: OutputStream) {.iocall.}
+    FlushAsyncProc* = proc (s: OutputStream): Future[void] {.iocall.}
+    CloseSyncProc* = proc (s: OutputStream) {.iocall.}
+    CloseAsyncProc* = proc (s: OutputStream): Future[void] {.iocall.}
 
     OutputStreamVTable* = object
       writeSync*: WriteSyncProc
@@ -68,15 +59,9 @@ else:
       when debugHelpers:
         name*: string
 
-
-    WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    FlushSyncProc* = proc (s: OutputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    CloseSyncProc* = proc (s: OutputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+    WriteSyncProc* = proc (s: OutputStream, src: pointer, srcLen: Natural) {.iocall.}
+    FlushSyncProc* = proc (s: OutputStream) {.iocall.}
+    CloseSyncProc* = proc (s: OutputStream) {.iocall.}
 
     OutputStreamVTable* = object
       writeSync*: WriteSyncProc
@@ -146,7 +131,7 @@ proc flush*(s: OutputStream) =
 
 proc close*(s: OutputStream,
             behavior = dontWaitAsyncClose)
-           {.raises: [IOError, Defect].} =
+           {.raises: [IOError].} =
   flush s
   disconnectOutputDevice(s)
   when fsAsyncSupport:
@@ -168,7 +153,7 @@ template closeNoWait*(sp: MaybeAsyncOutputStream) =
 # mysterious segmentation faults related to corrupted GC internal
 # data structures.
 #[
-proc `=destroy`*(h: var OutputStreamHandle) {.raises: [Defect].} =
+proc `=destroy`*(h: var OutputStreamHandle) {.raises: [].} =
   if h.s != nil:
     if h.s.vtable != nil and h.s.vtable.closeSync != nil:
       try:
@@ -255,7 +240,7 @@ template implementWrites*(buffersParam: PageBuffers,
     if bytesWritten != writeLenVar: raiseError()
 
 proc writeFileSync(s: OutputStream, src: pointer, srcLen: Natural)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
   var file = FileOutputStream(s).file
 
   implementWrites(s.buffers, src, srcLen, "FILE",
@@ -263,16 +248,16 @@ proc writeFileSync(s: OutputStream, src: pointer, srcLen: Natural)
     file.writeBuffer(writeStartAddr, writeLen)
 
 proc flushFileSync(s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
   flushFile FileOutputStream(s).file
 
 proc closeFileSync(s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
   close FileOutputStream(s).file
 
 when fsAsyncSupport:
   proc writeFileAsync(s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                     {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                     {.iocall.} =
     fsAssert FileOutputStream(s).allowAsyncOps
     writeFileSync(s, src, srcLen)
     result = newFuture[void]()
@@ -280,14 +265,14 @@ when fsAsyncSupport:
       result.complete()
 
   proc flushFileAsync(s: OutputStream): Future[void]
-                     {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                     {.iocall.} =
     fsAssert FileOutputStream(s).allowAsyncOps
     flushFile FileOutputStream(s).file
     result = newFuture[void]()
     fsTranslateErrors "Unexpected exception from merely completing a future":
       result.complete()
 
-let fileOutputVTable = when fsAsyncSupport:
+const fileOutputVTable = when fsAsyncSupport:
   OutputStreamVTable(
     writeSync: writeFileSync,
     writeAsync: writeFileAsync,
@@ -301,16 +286,15 @@ else:
     closeSync: closeFileSync)
 
 template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
-  ## This is a simple work-around for the somewhat broken side
-  ## effects analysis of Nim - reading from global let variables
-  ## is considered a side-effect.
-  {.noSideEffect.}:
+  when (NimMajor, NimMinor) >= (2, 0):
+    addr vtable
+  else:
     unsafeAddr vtable
 
 proc fileOutput*(f: File,
                  pageSize = defaultPageSize,
                  allowAsyncOps = false): OutputStreamHandle
-                {.raises: [IOError, Defect].} =
+                {.raises: [IOError].} =
   makeHandle FileOutputStream(
     vtable: vtableAddr fileOutputVTable,
     buffers: initPageBuffers(pageSize),
@@ -321,7 +305,7 @@ proc fileOutput*(filename: string,
                  fileMode: FileMode = fmWrite,
                  pageSize = defaultPageSize,
                  allowAsyncOps = false): OutputStreamHandle
-                {.raises: [IOError, Defect].} =
+                {.raises: [IOError].} =
   fileOutput(open(filename, fileMode), pageSize, allowAsyncOps)
 
 proc pos*(s: OutputStream): int =
@@ -834,7 +818,7 @@ proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
 
 type
   OutputConsumingProc = proc (data: openArray[byte])
-                             {.gcsafe, raises: [Defect].}
+                             {.gcsafe, raises: [].}
 
 proc consumeOutputsImpl(s: OutputStream, consumer: OutputConsumingProc) =
   let runway = s.span.len
@@ -854,7 +838,7 @@ template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ##
   ## Before consuming the outputs, all outstanding delayed writes must
   ## be finalized.
-  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [Defect].} =
+  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [].} =
     body
 
   consumeOutputsImpl(s, consumer)
@@ -900,7 +884,7 @@ template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   ## Before consuming the output, all outstanding delayed writes must
   ## be finalized.
   ##
-  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [Defect].} =
+  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [].} =
     body
 
   consumeContiguousOutputImpl(s, consumer)
