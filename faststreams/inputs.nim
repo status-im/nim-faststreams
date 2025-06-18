@@ -6,6 +6,8 @@ import
 export
   options, CloseBehavior
 
+{.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
+
 when fsAsyncSupport:
   # Circular type refs prevent more targeted `when`
   type
@@ -21,20 +23,11 @@ when fsAsyncSupport:
 
     AsyncInputStream* {.borrow: `.`.} = distinct InputStream
 
-    ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    ReadAsyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    CloseSyncProc* = proc (s: InputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    CloseAsyncProc* = proc (s: InputStream): Future[void]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    GetLenSyncProc* = proc (s: InputStream): Option[Natural]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+    ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural {.iocall.}
+    ReadAsyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural] {.iocall.}
+    CloseSyncProc* = proc (s: InputStream) {.iocall.}
+    CloseAsyncProc* = proc (s: InputStream): Future[void] {.iocall.}
+    GetLenSyncProc* = proc (s: InputStream): Option[Natural] {.iocall.}
 
     InputStreamVTable* = object
       readSync*: ReadSyncProc
@@ -55,15 +48,9 @@ else:
       when debugHelpers:
         name*: string
 
-
-    ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                        {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    CloseSyncProc* = proc (s: InputStream)
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
-
-    GetLenSyncProc* = proc (s: InputStream): Option[Natural]
-                          {.nimcall, gcsafe, raises: [IOError, Defect].}
+    ReadSyncProc* = proc (s: InputStream, dst: pointer, dstLen: Natural): Natural {.iocall.}
+    CloseSyncProc* = proc (s: InputStream) {.iocall.}
+    GetLenSyncProc* = proc (s: InputStream): Option[Natural] {.iocall.}
 
     InputStreamVTable* = object
       readSync*: ReadSyncProc
@@ -94,7 +81,7 @@ when fsAsyncSupport:
   template Sync*(s: AsyncInputStream): InputStream = InputStream(s)
   template Async*(s: AsyncInputStream): AsyncInputStream = s
 
-proc disconnectInputDevice(s: InputStream) =
+proc disconnectInputDevice(s: InputStream) {.raises: [IOError].} =
   # TODO
   # Document the behavior that closeAsync is preferred
   if s.vtable != nil:
@@ -125,7 +112,7 @@ template makeHandle*(sp: InputStream): InputStreamHandle =
 
 proc close*(s: InputStream,
             behavior = dontWaitAsyncClose)
-           {.raises: [IOError, Defect].} =
+           {.raises: [IOError].} =
   ## Closes the stream. Any resources associated with the stream
   ## will be released and no further reading will be possible.
   ##
@@ -167,7 +154,7 @@ template closeNoWait*(sp: MaybeAsyncInputStream) =
 # mysterious segmentation faults related to corrupted GC internal
 # data structures.
 #[
-proc `=destroy`*(h: var InputStreamHandle) {.raises: [Defect].} =
+proc `=destroy`*(h: var InputStreamHandle) {.raises: [].} =
   if h.s != nil:
     if h.s.vtable != nil and h.s.vtable.closeSync != nil:
       try:
@@ -192,22 +179,22 @@ converter implicitDeref*(h: InputStreamHandle): InputStream =
   h.s
 
 template vtableAddr*(vtable: InputStreamVTable): ptr InputStreamVTable =
-  # This is a simple work-around for the somewhat broken side
-  # effects analysis of Nim - reading from global let variables
-  # is considered a side-effect.
-  {.noSideEffect.}:
-    unsafeAddr vtable
+  # https://github.com/nim-lang/Nim/issues/22389
+  when (NimMajor, NimMinor, NimPatch) >= (2, 0, 12):
+    addr vtable
+  else:
+    let vtable2 {.global.} = vtable
+    {.noSideEffect.}:
+      unsafeAddr vtable2
 
-let memFileInputVTable = InputStreamVTable(
-  closeSync: proc (s: InputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+const memFileInputVTable = InputStreamVTable(
+  closeSync: proc (s: InputStream) =
     try:
       close MemFileInputStream(s).file
     except OSError as err:
       raise newException(IOError, "Failed to close file", err)
   ,
-  getLenSync: func (s: InputStream): Option[Natural]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+  getLenSync: func (s: InputStream): Option[Natural] =
     some s.span.len
 )
 
@@ -372,9 +359,9 @@ template withReadableRange*(sp: MaybeAsyncInputStream,
     s.span.endAddr = origEndAddr
     if s.buffers != nil: restoreEof(s.buffers, origEof)
 
-let fileInputVTable = InputStreamVTable(
+const fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                 {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                 {.iocall.} =
     let file = FileInputStream(s).file
     implementSingleRead(s.buffers, dst, dstLen,
                         {partialReadIsEof},
@@ -382,7 +369,7 @@ let fileInputVTable = InputStreamVTable(
       file.readBuffer(readStartAddr, readLen)
   ,
   getLenSync: proc (s: InputStream): Option[Natural]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     let
       s = FileInputStream(s)
       runway = s.totalUnconsumedBytes
@@ -395,7 +382,7 @@ let fileInputVTable = InputStreamVTable(
     some Natural(endPos - preservedPos + runway)
   ,
   closeSync: proc (s: InputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     try:
       close FileInputStream(s).file
     except OSError as err:
@@ -456,7 +443,7 @@ func unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
 func unsafeMemoryInput*(str: string): InputStreamHandle =
   unsafeMemoryInput str.toOpenArrayByte(0, str.len - 1)
 
-proc len*(s: InputStream): Option[Natural] {.raises: [Defect, IOError].} =
+proc len*(s: InputStream): Option[Natural] {.raises: [IOError].} =
   if s.vtable == nil:
     some s.totalUnconsumedBytes
   elif s.vtable.getLenSync != nil:

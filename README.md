@@ -72,13 +72,13 @@ bytes into a local buffer and then repeat the reading operation until enough
 data is gathered and the local buffer can be processed. On the other hand,
 if more data was received, you need to complete the current stage of processing
 and then somehow feed the remaining bytes into the next stage of processing
-(e.g this might be a nested format or a different parsing branch in the formal
+(e.g. this might be a nested format or a different parsing branch in the formal
  grammar of the protocol). Both of these scenarios require logic that is
 difficult to write correctly and results in unnecessary copying of the input
 bytes.
 
 A major difference in the FastStreams design is that the arbitrary-length
-data obtained from the input device is managed by the stream itself and you
+data obtained from the input device is managed by the stream itself while you
 are provided with an API allowing you to control precisely how much data
 is consumed from the stream. Consuming the buffered content does not invoke
 costly asynchronous calls and you are allowed to peek at the stream contents
@@ -133,7 +133,7 @@ of the box the following input stream types:
 
 * `memFileInput`
 
-  For reading memory mapped files which provides best performance.
+  For reading memory mapped files which provides the best performance.
 
 * `unsafeMemoryInput`
 
@@ -149,7 +149,7 @@ of the box the following input stream types:
 
 * `pipeInput` (async)
 
-  For arbitrary conmmunication between a produced and a consumer.
+  For arbitrary communication between a producer and a consumer.
 
 * `chronosInput` (async)
 
@@ -368,7 +368,7 @@ of the box the following output stream types:
 
 * `pipeOutput` (async)
 
-  For arbitrary conmmunication between a produced and a consumer.
+  For arbitrary communication between a produced and a consumer.
 
 * `chronosOutput` (async)
 
@@ -478,7 +478,7 @@ intermediate buffers.
 #### Delayed Writes
 
 Many protocols and formats employ fixed-size and variable-size length prefixes
-that have been tradionally difficult to handle because they require you to
+that have been traditionally difficult to handle because they require you to
 either measure the size of the content before writing it to the stream, or
 even worse, serialize it to a memory buffer in order to determine its size.
 
@@ -492,7 +492,7 @@ is written, you obtain `pos` again to determine the final value of the length
 prefix. Throughout the whole time, you are free to call `write` on the cursor
 to populate the "hole" left in the stream with bytes, but at the end you must
 call `finalize` to unlock the stream for flushing. You can also perform the
-finalization in one step with `finalWrite` (the one-step approach is manatory
+finalization in one step with `finalWrite` (the one-step approach is mandatory
 for variable-size prefixes).
 
 ### `Pipeline`
@@ -507,21 +507,21 @@ Each transformation step is a function of the kind:
 
 ```nim
 type PipelineStep* = proc (i: InputStream, o: OutputStream)
-                          {.gcsafe, raises: [Defect, CatchableError].}
+                          {.gcsafe, raises: [CatchableError].}
 ```
 
 A result obtaining operation is a function of the kind:
 
 ```nim
 type PipelineResultProc*[T] = proc (i: InputStream): T
-                                   {.gcsafe, raises: [Defect, CatchableError].}
+                                   {.gcsafe, raises: [CatchableError].}
 ```
 
 Please note that `stream.getOutput` is an example of such a function.
 
-Pipelnes executed in place with `executePipeline` API. If the first input source is
-async, then the whole pipeline with be executing asynchronously which can result
-in a much lower memory usage.
+Pipelines executed in place with `executePipeline` API. If the first input
+source is async, then the whole pipeline with be executing asynchronously which
+can result in a much lower memory usage.
 
 The pipeline transformation steps are usually employing the `fsMultiSync`
 pragma to make them usable in both synchronous and asynchronous scenarios.

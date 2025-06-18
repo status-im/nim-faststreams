@@ -5,6 +5,8 @@ import
 export
   chronos, fsMultiSync
 
+{.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
+
 type
   ChronosInputStream* = ref object of InputStream
     transport: StreamTransport
@@ -21,7 +23,7 @@ const
   writeIncompleteErrMsg = "Failed to write all bytes to Chronos transport"
 
 proc chronosCloseWait(t: StreamTransport)
-                     {.async, raises: [Defect, IOError].} =
+                     {.async, raises: [IOError].} =
   fsTranslateErrors closingErrMsg:
     await t.closeWait()
 
@@ -39,26 +41,26 @@ proc chronosWrites(s: ChronosOutputStream, src: pointer, srcLen: Natural) {.asyn
       await s.transport.write(writeStartAddr, writeLen)
 
 # TODO: Use the Raising type here
-let chronosInputVTable = InputStreamVTable(
+const chronosInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                 {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                 {.iocall.} =
     fsTranslateErrors "Unexpected exception from Chronos async macro":
       var cs = ChronosInputStream(s)
       fsAssert cs.allowWaitFor
       return waitFor chronosReadOnce(cs, dst, dstLen)
   ,
   readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     fsTranslateErrors "Unexpected exception from merely forwarding a future":
       return chronosReadOnce(ChronosInputStream s, dst, dstLen)
   ,
   closeSync: proc (s: InputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     fsTranslateErrors closingErrMsg:
       s.closeFut = ChronosInputStream(s).transport.close()
   ,
   closeAsync: proc (s: InputStream): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     chronosCloseWait ChronosInputStream(s).transport
 )
 
@@ -71,24 +73,24 @@ func chronosInput*(s: StreamTransport,
     transport: s,
     allowWaitFor: allowWaitFor)
 
-let chronosOutputVTable = OutputStreamVTable(
+const chronosOutputVTable = OutputStreamVTable(
   writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     var cs = ChronosOutputStream(s)
     fsAssert cs.allowWaitFor
     waitFor chronosWrites(cs, src, srcLen)
   ,
   writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     chronosWrites(ChronosOutputStream s, src, srcLen)
   ,
   closeSync: proc (s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     fsTranslateErrors closingErrMsg:
       s.closeFut = close ChronosOutputStream(s).transport
   ,
   closeAsync: proc (s: OutputStream): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     chronosCloseWait ChronosOutputStream(s).transport
 )
 
