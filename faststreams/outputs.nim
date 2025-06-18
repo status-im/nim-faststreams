@@ -477,7 +477,7 @@ proc getWritableBytesOnANewPage(s: OutputStream, spanSize: Natural): ptr byte =
   s.spanEndPos += nextPageSize - retiredSpanRunway
   s.span.startAddr
 
-template getWritableBytes*(sp: OutputStream, spanSizeParam: Natural): openArray[byte] =
+template getWritableBytes*(sp: OutputStream, spanSizeParam: Natural): var openArray[byte] =
   ## Returns a contiguous range of memory that the caller is free to populate fully
   ## or partially. The caller indicates how many bytes were written to the openArray
   ## by calling `advance(numberOfBytes)` once or multiple times. Advancing the stream

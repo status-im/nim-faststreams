@@ -30,7 +30,7 @@ proc run(args, path: string) =
   if (NimMajor, NimMinor) >= (2, 0):
     build args & " --mm:orc -r", path
 
-    if (NimMajor, NimMinor) >= (2, 2) and defined(linux) and "danger" in args:
+    if (NimMajor, NimMinor) >= (2, 2) and defined(linux) and defined(amd64) and "danger" in args:
       # Test with AddressSanitizer
       build args & " --mm:orc -d:useMalloc --cc:clang --passc:-fsanitize=address --passl:-fsanitize=address --debugger:native -r", path
 

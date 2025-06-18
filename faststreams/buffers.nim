@@ -79,12 +79,12 @@ func allocationEnd*(page: PageRef): ptr byte =
 func pageLen*(page: PageRef): Natural =
   page.writtenTo - page.consumedTo
 
-template pageBytes*(page: PageRef): openArray[byte] =
-  let baseAddr = cast[ptr UncheckedArray[byte]](allocationStart(page))
+template pageBytes*(page: PageRef): var openArray[byte] =
+  var baseAddr = cast[ptr UncheckedArray[byte]](allocationStart(page))
   toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
 template pageChars*(page: PageRef): openArray[char] =
-  let baseAddr = cast[ptr UncheckedArray[char]](allocationStart(page))
+  var baseAddr = cast[ptr UncheckedArray[char]](allocationStart(page))
   toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
 func obtainReadableSpan*(buffers: PageBuffers,

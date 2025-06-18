@@ -242,7 +242,7 @@ suite "output stream":
 
     checkOutputsMatch()
 
-proc writeBlock(data: openArray[byte], output: openArray[byte]): int =
+proc writeBlock(data: openArray[byte], output: var openArray[byte]): int =
   doAssert data.len <= output.len
   copyMem(unsafeAddr output[0], unsafeAddr data[0], data.len)
   data.len
