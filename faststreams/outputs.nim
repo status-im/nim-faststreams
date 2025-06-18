@@ -474,7 +474,7 @@ proc getWritableBytesOnANewPage(s: OutputStream, spanSize: Natural): ptr byte =
 
   let retiredSpanRunway = s.span.len
   s.span = nextPage.fullSpan
-  s.spanEndPos = s.spanEndPos - retiredSpanRunway + spanSize
+  s.spanEndPos += nextPageSize - retiredSpanRunway
   s.span.startAddr
 
 template getWritableBytes*(sp: OutputStream, spanSizeParam: Natural): openArray[byte] =

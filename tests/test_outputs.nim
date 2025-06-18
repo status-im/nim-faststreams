@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  os, unittest2, random, strformat,
+  os, unittest2, random, strformat, sequtils, strutils, algorithm,
   stew/ptrops,
   ../faststreams, ../faststreams/buffers, ../faststreams/textio
 
@@ -15,10 +15,6 @@ proc bytes(s: cstring): seq[byte] =
 template bytes(c: char): byte = byte(c)
 template bytes(b: seq[byte]): seq[byte] = b
 template bytes[N, T](b: array[N, T]): seq[byte] = @b
-
-proc repeat(b: byte, count: int): seq[byte] =
-  result = newSeq[byte](count)
-  for i in 0 ..< count: result[i] = b
 
 const line = "123456789123456789123456789123456789\n\n\n\n\n"
 
@@ -493,6 +489,35 @@ suite "randomized tests":
     check:
       res[0..<data.len] == data
 
+suite "output api":
   test "can close default OutputStream":
     var v: OutputStream
     v.close()
+
+  for pageSize in [1, 2, 10, 100]:
+    for advanceSize in [1, 2, 10]:
+      template testAdvance(expect: untyped) =
+        test "getWritableBytes with partial advance " & $pageSize & " " & $advanceSize:
+          var stream = memoryOutput(pageSize = pageSize)
+
+          fill(stream.getWritableBytes(10), byte 'A')
+          stream.advance(advanceSize)
+
+          check:
+            stream.getOutput(typeof(expect)) == expect
+
+        test "multiple getWritableBytes " & $pageSize & " " & $advanceSize:
+          var stream = memoryOutput(pageSize = pageSize)
+          var expect2: typeof(expect)
+          for _ in 0..<10:
+            fill(stream.getWritableBytes(10), byte 'A')
+            stream.advance(advanceSize)
+            expect2.add expect
+
+          check:
+            stream.getOutput(typeof(expect2)) == expect2
+
+
+      testAdvance(repeat('A', advanceSize))
+      testAdvance(repeat(byte 'A', advanceSize))
+

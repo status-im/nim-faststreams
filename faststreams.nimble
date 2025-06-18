@@ -24,17 +24,22 @@ let cfg =
 proc build(args, path: string) =
   exec nimc & " " & lang & " " & cfg & " " & flags & " " & args & " " & path
 
+import strutils
 proc run(args, path: string) =
   build args & " --mm:refc -r", path
-  if (NimMajor, NimMinor) > (1, 6):
+  if (NimMajor, NimMinor) >= (2, 0):
     build args & " --mm:orc -r", path
+
+    if (NimMajor, NimMinor) >= (2, 2) and defined(linux) and "danger" in args:
+      # Test with AddressSanitizer
+      build args & " --mm:orc -d:useMalloc --cc:clang --passc:-fsanitize=address --passl:-fsanitize=address --debugger:native -r", path
 
 task test, "Run all tests":
   # TODO asyncdispatch backend is broken / untested
   # TODO chronos backend uses nested waitFor which is not supported
   for backend in ["-d:asyncBackend=none"]:
     for threads in ["--threads:off", "--threads:on"]:
-      for mode in ["-d:debug", "-d:release", "-d:danger", "-d:useMalloc"]:
+      for mode in ["-d:debug", "-d:release", "-d:danger"]:
         run backend & " " & threads & " " & mode, "tests/all_tests"
 
 task testChronos, "Run chronos tests":
