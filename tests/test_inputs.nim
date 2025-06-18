@@ -147,6 +147,20 @@ suite "input stream":
     check fileContents == asciiTableContents
 
   suite "misc":
+    test "reading into empty buffer":
+      var input = memoryInput([byte 1])
+
+      var buf: seq[byte]
+      check:
+        # Reading into empty should succeed for open stream
+        input.readIntoEx(buf) == 0
+        input.readInto(buf)
+
+      buf.setLen(1)
+      check:
+        input.readIntoEx(buf) == 1
+        input.readIntoEx(buf) == 0
+        not input.readInto(buf)
     test "missing file input":
       const fileName = "there-is-no-such-faststreams-file"
 
