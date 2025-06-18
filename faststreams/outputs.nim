@@ -172,10 +172,6 @@ proc `=destroy`*(h: var OutputStreamHandle) {.raises: [].} =
 converter implicitDeref*(h: OutputStreamHandle): OutputStream =
   h.s
 
-template canExtendOutput(s: OutputStream): bool =
-  # Streams writing to pre-allocated existing buffers cannot be grown
-  s != nil and s.buffers != nil
-
 proc addPage(s: OutputStream) =
   let
     nextPageSize = s.buffers.pageSize

@@ -20,15 +20,11 @@ template matchingIntType(T: type uint32): type = int32
 when sizeof(int) == sizeof(int64):
   type
     CompiledIntTypes = int64
-    PromotedIntTypes = int8|int16|int32
     CompiledUIntTypes = uint64
-    PromotedUintTypes = uint8|uint16|uint32
 else:
   type
     CompiledIntTypes = int32|int64
-    PromotedIntTypes = int8|int16
     CompiledUIntTypes = uint32|uint64
-    PromotedUintTypes = uint8|uint16
 
 # The following code implements writing numbers to a stream without going
 # through Nim's `$` operator which will allocate memory.
