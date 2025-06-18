@@ -8,7 +8,7 @@ license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
 requires "nim >= 1.6.0",
-         "stew",
+         "stew >= 0.2.0",
          "unittest2"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
