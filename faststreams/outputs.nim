@@ -286,10 +286,13 @@ else:
     closeSync: closeFileSync)
 
 template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
-  when (NimMajor, NimMinor) >= (2, 0):
+  # https://github.com/nim-lang/Nim/issues/22389
+  when (NimMajor, NimMinor, NimPatch) >= (2, 0, 12):
     addr vtable
   else:
-    unsafeAddr vtable
+    let vtable2 {.global.} = vtable
+    {.noSideEffect.}:
+      unsafeAddr vtable2
 
 proc fileOutput*(f: File,
                  pageSize = defaultPageSize,

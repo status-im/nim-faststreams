@@ -176,10 +176,13 @@ converter implicitDeref*(h: InputStreamHandle): InputStream =
   h.s
 
 template vtableAddr*(vtable: InputStreamVTable): ptr InputStreamVTable =
-  when (NimMajor, NimMinor) >= (2, 0):
+  # https://github.com/nim-lang/Nim/issues/22389
+  when (NimMajor, NimMinor, NimPatch) >= (2, 0, 12):
     addr vtable
   else:
-    unsafeAddr vtable
+    let vtable2 {.global.} = vtable
+    {.noSideEffect.}:
+      unsafeAddr vtable2
 
 const memFileInputVTable = InputStreamVTable(
   closeSync: proc (s: InputStream) =
