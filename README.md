@@ -507,14 +507,14 @@ Each transformation step is a function of the kind:
 
 ```nim
 type PipelineStep* = proc (i: InputStream, o: OutputStream)
-                          {.gcsafe, raises: [Defect, CatchableError].}
+                          {.gcsafe, raises: [CatchableError].}
 ```
 
 A result obtaining operation is a function of the kind:
 
 ```nim
 type PipelineResultProc*[T] = proc (i: InputStream): T
-                                   {.gcsafe, raises: [Defect, CatchableError].}
+                                   {.gcsafe, raises: [CatchableError].}
 ```
 
 Please note that `stream.getOutput` is an example of such a function.

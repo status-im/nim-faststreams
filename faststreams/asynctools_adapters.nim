@@ -8,6 +8,8 @@ when (not fsAsyncSupport):
 export
   inputs, outputs, asyncpipe, fsMultiSync
 
+{.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
+
 type
   AsyncPipeInput* = ref object of InputStream
     pipe: AsyncPipe
@@ -24,7 +26,7 @@ const
   writeIncompleteErrMsg = "Failed to write all bytes to AsyncPipe"
 
 proc closeAsyncPipe(pipe: AsyncPipe)
-                   {.raises: [Defect, IOError].} =
+                   {.raises: [IOError].} =
   fsTranslateErrors closingErrMsg:
     close pipe
 
@@ -42,25 +44,25 @@ proc write(s: AsyncPipeOutput, src: pointer, srcLen: Natural) {.async.} =
       await s.pipe.write(writeStartAddr, writeLen)
 
 # TODO: Use the Raising type here
-let asyncPipeInputVTable = InputStreamVTable(
+const asyncPipeInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
-                 {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                 {.iocall.} =
     fsTranslateErrors "Unexpected exception from asyncdispatch":
       var cs = AsyncPipeInput(s)
       fsAssert cs.allowWaitFor
       return waitFor readOnce(cs, dst, dstLen)
   ,
   readAsync: proc (s: InputStream, dst: pointer, dstLen: Natural): Future[Natural]
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     fsTranslateErrors "Unexpected exception from merely forwarding a future":
       return readOnce(AsyncPipeInput s, dst, dstLen)
   ,
   closeSync: proc (s: InputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     closeAsyncPipe AsyncPipeInput(s).pipe
   ,
   closeAsync: proc (s: InputStream): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     closeAsyncPipe AsyncPipeInput(s).pipe
 )
 
@@ -73,25 +75,25 @@ func asyncPipeInput*(pipe: AsyncPipe,
     pipe: pipe,
     allowWaitFor: allowWaitFor)
 
-let asyncPipeOutputVTable = OutputStreamVTable(
+const asyncPipeOutputVTable = OutputStreamVTable(
   writeSync: proc (s: OutputStream, src: pointer, srcLen: Natural)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     fsTranslateErrors "Unexpected exception from asyncdispatch":
       var cs = AsyncPipeOutput(s)
       fsAssert cs.allowWaitFor
       waitFor write(cs, src, srcLen)
   ,
   writeAsync: proc (s: OutputStream, src: pointer, srcLen: Natural): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     fsTranslateErrors "Unexpected exception from merely forwarding a future":
       return write(AsyncPipeOutput s, src, srcLen)
   ,
   closeSync: proc (s: OutputStream)
-                  {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                  {.iocall.} =
     closeAsyncPipe AsyncPipeOutput(s).pipe
   ,
   closeAsync: proc (s: OutputStream): Future[void]
-                   {.nimcall, gcsafe, raises: [IOError, Defect].} =
+                   {.iocall.} =
     closeAsyncPipe AsyncPipeOutput(s).pipe
 )
 
