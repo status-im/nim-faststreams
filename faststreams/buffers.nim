@@ -190,8 +190,7 @@ func fromBytes(src: pointer, srcLen: Natural): seq[byte] =
     copyMem(baseAddr result, src, srcLen)
 
 func nextAlignedSize*(minSize, pageSize: Natural): Natural =
-  # TODO: This is not perfectly accurate. Revisit later
-  ((minSize div pageSize) + 1) * pageSize
+  ((minSize + pageSize - 1) div pageSize) * pageSize
 
 func appendUnbufferedWrite*(buffers: PageBuffers,
                             src: pointer, srcLen: Natural) =
