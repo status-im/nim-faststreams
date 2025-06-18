@@ -966,8 +966,8 @@ when fsAsyncSupport:
       flush s
 
     proc close*(sp: AsyncOutputStream) =
-      if sp != nil:
-        let s = OutputStream sp
+      let s = OutputStream sp
+      if s != nil:
         flush(Async s)
         disconnectOutputDevice(s)
         if s.closeFut != nil:
