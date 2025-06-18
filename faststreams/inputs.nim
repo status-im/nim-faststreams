@@ -149,8 +149,8 @@ when fsAsyncSupport:
   template close*(sp: AsyncInputStream) =
     ## Starts the asychronous closing of the stream and returns a future that
     ## tracks the closing operation.
-    if sp != nil:
-      let s = InputStream sp
+    let s = InputStream sp
+    if s != nil:
       disconnectInputDevice(s)
       preventFurtherReading(s)
       if s.closeFut != nil:
