@@ -1,7 +1,7 @@
 {.used.}
 
 import
-  os, unittest2, strutils, random,
+  os, unittest2, strutils, sequtils, random,
   ../faststreams, ../faststreams/textio
 
 setCurrentDir currentSourcePath.parentDir
@@ -184,15 +184,70 @@ suite "input stream":
           check r.totalUnconsumedBytes == 20
           check r.readAll.len == 20
 
-      check s.readable
-
-      if s.readable(200):
-        s.withReadableRange(200, r):
-          check r.len.get == 200
-          check r.totalUnconsumedBytes == 200
-          check r.readAll.len == 200
+      if s.readable(20):
+        s.withReadableRange(20, r):
+          check r.len.get == 20
+          check r.totalUnconsumedBytes == 20
+          check r.readAll.len == 20
 
       check s.readable
+
+      if s.readable(160):
+        s.withReadableRange(160, r):
+          check r.len.get == 160
+          check r.totalUnconsumedBytes == 160
+          check r.readAll.len == 160
+
+      check s.readable
+
+      if s.readable(20):
+        s.withReadableRange(20, r):
+          check r.len.get == 20
+          check r.totalUnconsumedBytes == 20
+          check r.readAll.len == 20
+
+      check s.readable
+
+    test "draining readable ranges":
+      let s = memoryInput(repeat(byte 5, 100))
+      check:
+        s.readable(20)
+
+      s.withReadableRange(20, r):
+        var tmp: array[100, byte]
+
+        check:
+          r.drainBuffersInto(addr tmp[0], tmp.len) == 20
+          @tmp == repeat(byte 5, 20) & repeat(byte 0, 80)
+
+      check:
+        s.readable(80)
+
+      var tmp: array[10, byte]
+      check:
+        s.drainBuffersInto(addr tmp[0], tmp.len) == 10
+
+        @tmp == repeat(byte 5, 10)
+
+      s.withReadableRange(50, r):
+        var tmp: array[100, byte]
+        check:
+          r.drainBuffersInto(addr tmp[0], tmp.len) == 50
+          @tmp == repeat(byte 5, 50) & repeat(byte 0, 50)
+
+      check:
+        s.readable()
+
+      check:
+        s.drainBuffersInto(addr tmp[0], tmp.len) == 10
+        @tmp == repeat(byte 5, 10)
+
+      check:
+        s.drainBuffersInto(addr tmp[0], tmp.len) == 10
+        @tmp == repeat(byte 5, 10)
+
+      check:
+        not s.readable()
 
     test "simple":
       var input = repeat("1234 5678 90AB CDEF\n", 1000)

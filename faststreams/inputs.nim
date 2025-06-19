@@ -16,10 +16,10 @@ when fsAsyncSupport:
       buffers*: PageBuffers          # This is nil for unsafe memory inputs
       span*: PageSpan
       spanEndPos*: Natural
+      maxBufferedBytes*: Option[Natural]
       closeFut*: Future[void]      # This is nil before `close` is called
       when debugHelpers:
         name*: string
-
 
     AsyncInputStream* {.borrow: `.`.} = distinct InputStream
 
@@ -45,6 +45,10 @@ else:
       buffers*: PageBuffers          # This is nil for unsafe memory inputs
       span*: PageSpan
       spanEndPos*: Natural
+      maxBufferedBytes*: Option[Natural]
+        # When using withReadableRange, the amount of bytes we're allowed to
+        # obtain from buffers (in addition to what's in the span)
+
       when debugHelpers:
         name*: string
 
@@ -246,7 +250,10 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
 func getNewSpan(s: InputStream) =
   let buffers = s.buffers
   fsAssert buffers != nil
-  s.span = buffers.obtainReadableSpan(s.spanEndPos)
+  s.span = buffers.obtainReadableSpan(s.maxBufferedBytes)
+  s.spanEndPos += s.span.len
+  if s.maxBufferedBytes.isSome():
+    s.maxBufferedBytes.get() -= s.span.len
 
 func getNewSpanOrDieTrying(s: InputStream) =
   getNewSpan s
@@ -315,49 +322,57 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
   ## buffers and that can be consumed with `read` or `advance`.
   let
     localRunway = s.span.len
-    runwayInBuffers = if s.buffers == nil:
-                        0
-                      elif s.buffers.fauxEofPos != 0:
-                        s.buffers.fauxEofPos - s.spanEndPos
-                      else:
-                        s.buffers.totalBufferedBytes
-
-  if localRunway == 0 and runwayInBuffers > 0:
-    getNewSpan s
+    runwayInBuffers =
+      if s.maxBufferedBytes.isSome():
+        s.maxBufferedBytes.get()
+      elif s.buffers != nil:
+        s.buffers.totalBufferedBytes
+      else:
+        0
 
   localRunway + runwayInBuffers
 
-func limitReadableRange(s: InputStream, rangeLen: Natural): Natural =
-  s.vtable = nil
+proc prepareReadableRange(s: InputStream, rangeLen: Natural): auto =
+  let
+    vtable = s.vtable
+    maxBufferedBytes = s.maxBufferedBytes
 
-  let runway = s.span.len
-  if rangeLen > runway:
-    fsAssert s.buffers != nil
-    return s.buffers.setFauxEof(rangeLen - runway + s.spanEndPos)
-  else:
-    s.span.endAddr = offset(s.span.startAddr, rangeLen)
-    let bytesToUnconsume = runway - rangeLen
-    s.spanEndPos -= bytesToUnconsume
-    if s.buffers != nil:
-      s.buffers.queue.peekFirst.consumedTo -= bytesToUnconsume
-      return s.buffers.setFauxEof(s.spanEndPos)
+    runway = s.span.len
+    endBytes =
+      if rangeLen <= runway:
+        s.span.endAddr = offset(s.span.startAddr, rangeLen)
+
+        if s.buffers != nil:
+          s.buffers.returnReadableSpan(runway - rangeLen)
+          s.maxBufferedBytes = some Natural 0
+          0 # The bytes we removed from the local span are in the buffers already
+        else:
+          runway - rangeLen
+      else:
+        assert s.buffers != nil, "need buffers to cover the non-span part"
+        s.maxBufferedBytes = some Natural (rangeLen - runway)
+        0
+
+  s.vtable = nil
+  debugEcho "prep ", runway, " ", rangeLen, " ", maxBufferedBytes, " ", endBytes, " ", repr(s.span.startAddr)
+  (vtable: vtable, maxBufferedBytes: maxBufferedBytes, endBytes: endBytes)
+
+proc restoreReadableRange(s: InputStream, state: auto) =
+  s.vtable = state.vtable
+  s.maxBufferedBytes = state.maxBufferedBytes
+  s.span.endAddr = offset(s.span.endAddr, state.endBytes)
 
 template withReadableRange*(sp: MaybeAsyncInputStream,
                             rangeLen: Natural,
                             rangeStreamVarName, blk: untyped) =
   let
     s = InputStream sp
-    vtable = s.vtable
-    origEndAddr = s.span.endAddr
-    origEof = limitReadableRange(s, rangeLen)
-
+    state = prepareReadableRange(s, rangeLen)
   try:
     let rangeStreamVarName {.inject.} = s
     blk
   finally:
-    s.vtable = vtable
-    s.span.endAddr = origEndAddr
-    if s.buffers != nil: restoreEof(s.buffers, origEof)
+    s.restoreReadableRange(state)
 
 const fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
@@ -456,26 +471,15 @@ when fsAsyncSupport:
     len InputStream(s)
 
 func memoryInput*(buffers: PageBuffers): InputStreamHandle =
-  var spanEndPos = Natural 0
-  var span = if buffers.len == 0: default(PageSpan)
-             else: buffers.obtainReadableSpan(spanEndPos)
-
-  makeHandle InputStream(buffers: buffers,
-                         span: span,
-                         spanEndPos: spanEndPos)
+  makeHandle InputStream(buffers: buffers)
 
 func memoryInput*(data: openArray[byte]): InputStreamHandle =
   let stream = if data.len > 0:
     let
       buffers = initPageBuffers(data.len)
-      page = buffers.addWritablePage(data.len)
-      pageSpan = page.fullSpan
+    buffers.appendUnbufferedWrite(baseAddr data, data.len)
 
-    copyMem(pageSpan.startAddr, baseAddr(data), data.len)
-
-    InputStream(buffers: buffers,
-                span: pageSpan,
-                spanEndPos: data.len)
+    InputStream(buffers: buffers)
   else:
     InputStream()
 
@@ -735,62 +739,37 @@ func drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
     runway = s.span.len
 
   if runway >= remainingBytes:
+    # Fast path: there is more data in the span that is being requested
     copyMem(dst, s.span.startAddr, remainingBytes)
     s.span.bumpPointer remainingBytes
     return dstLen
-  elif runway > 0:
+
+  if runway > 0:
     copyMem(dst, s.span.startAddr, runway)
     dst = offset(dst, runway)
     remainingBytes -= runway
 
   if s.buffers != nil:
-    # Since we reached the end of the current page,
-    # we have to do the equivalent of `getNewSpan`:
+    while remainingBytes > 0:
+      getNewSpan s
+      runway = s.span.len
 
-    if s.buffers.len > 0 and s.buffers[0].pageLen == 0:
-      discard s.buffers.popFirst()
+      if runway == 0:
+        break
 
-    for page in consumePages(s.buffers):
-      let
-        pageStart = page.readableStart
-        pageLen = page.writtenTo - page.consumedTo
+      let bytes = min(runway, remainingBytes)
 
-      # There are two possible scenarios ahead:
-      # 1) We'll either stop at this page in which case our span will
-      #    point to the end of the page (so, it's fully consumed)
-      # 2) We are going to copy the entire page to the destination
-      #    buffer and we'll continue (so, it's fully consumed again)
-      page.consumedTo = page.writtenTo
+      copyMem(dst, s.span.startAddr, bytes)
+      dst = offset(dst, bytes)
+      remainingBytes -= bytes
 
-      if pageLen > remainingBytes:
-        # This page has enough data to fill the rest of the buffer:
-        copyMem(dst, pageStart, remainingBytes)
+      s.span.bumpPointer(bytes) # In case we exit the loop
 
-        # This page is partially consumed now and we must set our
-        # span to point to its remaining contents:
-        s.span = PageSpan(startAddr: offset(pageStart, remainingBytes),
-                          endAddr: page.readableEnd)
+  else:
+    # We've completerly drained the current span and there are no more buffers
+    s.span = default(PageSpan)
 
-        # We also need to know how much our position in the stream
-        # has advanced:
-        let bytesDrainedFromBuffers = dstLen - runway
-        s.spanEndPos += bytesDrainedFromBuffers + s.span.len
-
-        # We return the length of the buffer, which means that is
-        # has been fully populated:
-        return dstLen
-      else:
-        copyMem(dst, pageStart, pageLen)
-        remainingBytes -= pageLen
-        dst = offset(dst, pageLen)
-
-  # We've completerly drained the current span and all the buffers,
-  # so we set the span to a pristine state that will trigger a new
-  # read on the next interaction with the stream.
-  s.span = default(PageSpan)
-
-  # We failed to populate the entire buffer
-  return dstLen - remainingBytes
+  dstLen - remainingBytes
 
 template readIntoExImpl(s: InputStream,
                         dst: ptr byte, dstLen: Natural,
