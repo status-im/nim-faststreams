@@ -1,5 +1,5 @@
 import
-  deques,
+  std/[deques, options],
   stew/ptrops,
   async_backend
 
@@ -27,7 +27,6 @@ type
       waitingWriter*: Future[void]
 
     eofReached*: bool
-    fauxEofPos*: Natural
 
 const
   nimPageSize* = 4096
@@ -87,8 +86,7 @@ template pageChars*(page: PageRef): openArray[char] =
   var baseAddr = cast[ptr UncheckedArray[char]](allocationStart(page))
   toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
-func obtainReadableSpan*(buffers: PageBuffers,
-                         currentSpanEndPos: var Natural): PageSpan =
+func obtainReadableSpan*(buffers: PageBuffers, maxLen: Option[Natural]): PageSpan =
   if buffers.queue.len == 0:
     return default(PageSpan)
 
@@ -106,20 +104,20 @@ func obtainReadableSpan*(buffers: PageBuffers,
     baseAddr = page.allocationStart
     startAddr = offset(baseAddr, page.consumedTo)
 
-  let usableLen = if buffers.fauxEofPos != 0:
-    let maxSize = buffers.fauxEofPos - currentSpanEndPos
-    if maxSize < unconsumedLen:
-      maxSize
-    else:
-      unconsumedLen
+  let usableLen = if maxLen.isSome():
+    min(unconsumedLen, maxLen.get())
   else:
     unconsumedLen
 
   page.consumedTo += usableLen
-  currentSpanEndPos += usableLen
 
   PageSpan(startAddr: startAddr,
            endAddr: offset(startAddr, usableLen))
+
+func returnReadableSpan*(buffers: PageBuffers, bytes: Natural) =
+  # return part of span that was previously given by `obtainReadableSpan`
+  assert buffers.queue.len > 0
+  buffers.queue.peekFirst.consumedTo -= bytes
 
 func writableSpan*(page: PageRef): PageSpan =
   let baseAddr = allocationStart(page)
@@ -151,13 +149,6 @@ func trackWrittenTo*(buffers: PageBuffers, spanHeadPos: ptr byte) =
   if buffers != nil and buffers.queue.len > 0:
     var topPage = buffers.queue.peekLast
     topPage.writtenTo = distance(topPage.allocationStart, spanHeadPos)
-
-proc setFauxEof*(buffers: PageBuffers, pos: Natural): Natural =
-  result = buffers.fauxEofPos
-  buffers.fauxEofPos = pos
-
-proc restoreEof*(buffers: PageBuffers, pos: Natural) =
-  buffers.fauxEofPos = pos
 
 template allocWritablePage*(pageSize: Natural, writtenToParam: Natural = 0): auto =
   PageRef(data: allocRef newSeqUninitialized[byte](pageSize),
