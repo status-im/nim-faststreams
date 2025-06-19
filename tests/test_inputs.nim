@@ -208,46 +208,55 @@ suite "input stream":
 
       check s.readable
 
-    test "draining readable ranges":
-      let s = memoryInput(repeat(byte 5, 100))
-      check:
-        s.readable(20)
+    template drainTest(name: string, setup: untyped) =
+      test "draining readable ranges " & name:
+        setup
+        check:
+          s.readable(20)
 
-      s.withReadableRange(20, r):
-        var tmp: array[100, byte]
+        s.withReadableRange(20, r):
+          var tmp: array[100, byte]
+
+          check:
+            r.drainBuffersInto(addr tmp[0], tmp.len) == 20
+            @tmp == repeat(byte 5, 20) & repeat(byte 0, 80)
 
         check:
-          r.drainBuffersInto(addr tmp[0], tmp.len) == 20
-          @tmp == repeat(byte 5, 20) & repeat(byte 0, 80)
+          s.readable(80)
 
-      check:
-        s.readable(80)
-
-      var tmp: array[10, byte]
-      check:
-        s.drainBuffersInto(addr tmp[0], tmp.len) == 10
-
-        @tmp == repeat(byte 5, 10)
-
-      s.withReadableRange(50, r):
-        var tmp: array[100, byte]
+        var tmp: array[10, byte]
         check:
-          r.drainBuffersInto(addr tmp[0], tmp.len) == 50
-          @tmp == repeat(byte 5, 50) & repeat(byte 0, 50)
+          s.drainBuffersInto(addr tmp[0], tmp.len) == 10
 
-      check:
-        s.readable()
+          @tmp == repeat(byte 5, 10)
 
-      check:
-        s.drainBuffersInto(addr tmp[0], tmp.len) == 10
-        @tmp == repeat(byte 5, 10)
+        s.withReadableRange(50, r):
+          var tmp: array[100, byte]
+          check:
+            r.drainBuffersInto(addr tmp[0], tmp.len) == 50
+            @tmp == repeat(byte 5, 50) & repeat(byte 0, 50)
 
-      check:
-        s.drainBuffersInto(addr tmp[0], tmp.len) == 10
-        @tmp == repeat(byte 5, 10)
+        check:
+          s.readable()
 
-      check:
-        not s.readable()
+        check:
+          s.drainBuffersInto(addr tmp[0], tmp.len) == 10
+          @tmp == repeat(byte 5, 10)
+
+        check:
+          s.drainBuffersInto(addr tmp[0], tmp.len) == 10
+          @tmp == repeat(byte 5, 10)
+
+        check:
+          not s.readable()
+
+    drainTest "unsafeMemoryInput":
+      var data = repeat(byte 5, 100)
+      let s = unsafeMemoryInput(data)
+
+    drainTest "memoryInput":
+      var data = repeat(byte 5, 100)
+      let s = memoryInput(data)
 
     test "simple":
       var input = repeat("1234 5678 90AB CDEF\n", 1000)

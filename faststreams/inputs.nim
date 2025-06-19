@@ -105,7 +105,7 @@ when fsAsyncSupport:
 
 func preventFurtherReading(s: InputStream) =
   s.vtable = nil
-  s.span = default(PageSpan)
+  s.span.endAddr = s.span.startAddr
 
 when fsAsyncSupport:
   template preventFurtherReading(s: AsyncInputStream) =
@@ -354,7 +354,6 @@ proc prepareReadableRange(s: InputStream, rangeLen: Natural): auto =
         0
 
   s.vtable = nil
-  debugEcho "prep ", runway, " ", rangeLen, " ", maxBufferedBytes, " ", endBytes, " ", repr(s.span.startAddr)
   (vtable: vtable, maxBufferedBytes: maxBufferedBytes, endBytes: endBytes)
 
 proc restoreReadableRange(s: InputStream, state: auto) =
@@ -766,8 +765,10 @@ func drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
       s.span.bumpPointer(bytes) # In case we exit the loop
 
   else:
-    # We've completerly drained the current span and there are no more buffers
-    s.span = default(PageSpan)
+    # We've completerly drained the current span and there are no more buffers,
+    # however we have to maintain the end address in case we're in a readable
+    # range
+    s.span.bumpPointer(runway)
 
   dstLen - remainingBytes
 
