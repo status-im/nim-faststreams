@@ -219,3 +219,10 @@ suite "input stream":
 
   posTest "memFileInput pos":
     var input = memFileInput(asciiTableFile)
+
+  test "buffered peekAt":
+    let s = fileInput(asciiTableFile, pageSize = 3)
+    for i in 0..10:
+      if s.readable(i + 1):
+        check:
+          s.peekAt(i) == byte asciiTableContents[i]

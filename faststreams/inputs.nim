@@ -701,10 +701,20 @@ when fsAsyncSupport:
     read InputStream(s)
 
 func peekAt*(s: InputStream, pos: int): byte {.inline.} =
-  # TODO implement page flipping
-  let peekHead = offset(s.span.startAddr, pos)
-  fsAssert cast[uint](peekHead) < cast[uint](s.span.endAddr)
-  return peekHead[]
+  let runway = s.span.len
+  if pos < runway:
+    let peekHead = offset(s.span.startAddr, pos)
+    return peekHead[]
+
+  if s.buffers != nil:
+    var p = pos - runway
+    for page in s.buffers.queue:
+      if p < page.pageLen:
+        return page.pageBytes[p]
+      p -= page.pageLen()
+
+  fsAssert false,
+    "peeking past readable position pos=" & $pos & " readable = " & $s.totalUnconsumedBytes()
 
 when fsAsyncSupport:
   template peekAt*(s: AsyncInputStream, pos: int): byte =
