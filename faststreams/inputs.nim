@@ -105,6 +105,7 @@ when fsAsyncSupport:
 
 func preventFurtherReading(s: InputStream) =
   s.vtable = nil
+  fsAssert s.span.startAddr <= s.span.endAddr, "Buffer overrun in previous read!"
   s.span.endAddr = s.span.startAddr
 
 when fsAsyncSupport:
@@ -250,7 +251,9 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
 func getNewSpan(s: InputStream) =
   let buffers = s.buffers
   fsAssert buffers != nil
-  s.span = buffers.obtainReadableSpan(s.maxBufferedBytes)
+  fsAssert s.span.startAddr <= s.span.endAddr, "Buffer overrun in previous read!"
+
+  s.span = buffers.consume(s.maxBufferedBytes.get(int.high))
   s.spanEndPos += s.span.len
   if s.maxBufferedBytes.isSome():
     s.maxBufferedBytes.get() -= s.span.len
@@ -326,7 +329,7 @@ func totalUnconsumedBytes*(s: InputStream): Natural =
       if s.maxBufferedBytes.isSome():
         s.maxBufferedBytes.get()
       elif s.buffers != nil:
-        s.buffers.totalBufferedBytes
+        s.buffers.consumable()
       else:
         0
 
@@ -343,7 +346,7 @@ proc prepareReadableRange(s: InputStream, rangeLen: Natural): auto =
         s.span.endAddr = offset(s.span.startAddr, rangeLen)
 
         if s.buffers != nil:
-          s.buffers.returnReadableSpan(runway - rangeLen)
+          s.buffers.unconsume(runway - rangeLen)
           s.maxBufferedBytes = some Natural 0
           0 # The bytes we removed from the local span are in the buffers already
         else:
@@ -424,7 +427,7 @@ proc fileInput*(file: File,
 
   makeHandle FileInputStream(
     vtable: vtableAddr fileInputVTable,
-    buffers: initPageBuffers(pageSize),
+    buffers: if pageSize > 0: PageBuffers.init(pageSize) else: nil,
     file: file)
 
 proc fileInput*(filename: string,
@@ -474,9 +477,8 @@ func memoryInput*(buffers: PageBuffers): InputStreamHandle =
 
 func memoryInput*(data: openArray[byte]): InputStreamHandle =
   let stream = if data.len > 0:
-    let
-      buffers = initPageBuffers(data.len)
-    buffers.appendUnbufferedWrite(baseAddr data, data.len)
+    let buffers = PageBuffers.init(data.len)
+    buffers.write(data)
 
     InputStream(buffers: buffers)
   else:
@@ -485,7 +487,7 @@ func memoryInput*(data: openArray[byte]): InputStreamHandle =
   makeHandle stream
 
 func memoryInput*(data: openArray[char]): InputStreamHandle =
-  memoryInput charsToBytes(data)
+  memoryInput data.toOpenArrayByte(0, data.high())
 
 func resetBuffers*(s: InputStream, buffers: PageBuffers) =
   # This should be used only on safe memory input streams
@@ -508,9 +510,9 @@ proc continueAfterRead(s: InputStream, bytesRead: Natural): bool =
 
   if bytesRead > 0:
     getNewSpan s
-    return true
+    true
   else:
-    return false
+    false
 
 template bufferMoreDataImpl(s, awaiter, readOp: untyped): bool =
   # This template is always called when the current page has been
@@ -687,15 +689,12 @@ when fsAsyncSupport:
 
 func readFromNewSpan(s: InputStream): byte =
   getNewSpanOrDieTrying s
-  result = s.span.startAddr[]
-  bumpPointer s.span
+  s.span.read()
 
 template read*(sp: InputStream): byte =
   let s = sp
   if hasRunway(s.span):
-    let res = s.span.startAddr[]
-    bumpPointer(s.span)
-    res
+    s.span.read()
   else:
     readFromNewSpan s
 
@@ -712,9 +711,9 @@ func peekAt*(s: InputStream, pos: int): byte {.inline.} =
   if s.buffers != nil:
     var p = pos - runway
     for page in s.buffers.queue:
-      if p < page.pageLen:
-        return page.pageBytes[p]
-      p -= page.pageLen()
+      if p < page.len():
+        return page.data()[p]
+      p -= page.len()
 
   fsAssert false,
     "peeking past readable position pos=" & $pos & " readable = " & $s.totalUnconsumedBytes()
@@ -724,10 +723,10 @@ when fsAsyncSupport:
     peekAt InputStream(s), pos
 
 func advance*(s: InputStream) =
-  if hasRunway(s.span):
-    bumpPointer s.span
-  else:
-    getNewSpan s
+  if s.span.atEnd:
+    getNewSpanOrDieTrying s
+
+  s.span.advance()
 
 func advance*(s: InputStream, n: Natural) =
   # TODO This is silly, implement it properly
@@ -749,12 +748,11 @@ func drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
 
   if runway >= remainingBytes:
     # Fast path: there is more data in the span that is being requested
-    copyMem(dst, s.span.startAddr, remainingBytes)
-    s.span.bumpPointer remainingBytes
+    s.span.read(dst.makeOpenArray(remainingBytes))
     return dstLen
 
   if runway > 0:
-    copyMem(dst, s.span.startAddr, runway)
+    s.span.read(dst.makeOpenArray(runway))
     dst = offset(dst, runway)
     remainingBytes -= runway
 
@@ -768,17 +766,9 @@ func drainBuffersInto*(s: InputStream, dstAddr: ptr byte, dstLen: Natural): Natu
 
       let bytes = min(runway, remainingBytes)
 
-      copyMem(dst, s.span.startAddr, bytes)
+      s.span.read(dst.makeOpenArray(bytes))
       dst = offset(dst, bytes)
       remainingBytes -= bytes
-
-      s.span.bumpPointer(bytes) # In case we exit the loop
-
-  else:
-    # We've completerly drained the current span and there are no more buffers,
-    # however we have to maintain the end address in case we're in a readable
-    # range
-    s.span.bumpPointer(runway)
 
   dstLen - remainingBytes
 
@@ -891,7 +881,7 @@ template readNImpl(sp: InputStream,
       fsAssert drained == n
     else:
       startAddr = s.span.startAddr
-      bumpPointer s.span, n
+      s.span.advance(n)
 
   makeOpenArray(startAddr, n)
 

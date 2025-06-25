@@ -12,9 +12,13 @@ import
   buffers, async_backend
 
 export
-  initPageBuffers, CloseBehavior
+  buffers, CloseBehavior
 
 {.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
+
+when not declared(newSeqUninit): # nim 2.2+
+  template newSeqUninit[T: byte](len: int): seq[byte] =
+    newSeqUninitialized[byte](len)
 
 when fsAsyncSupport:
   # Circular type refs prevent more targeted `when`
@@ -73,6 +77,7 @@ else:
 type
   WriteCursor* = object
     span: PageSpan
+    spill: PageSpan
     stream: OutputStream
 
   LayeredOutputStream* = ref object of OutputStream
@@ -113,15 +118,27 @@ when fsAsyncSupport:
   template disconnectOutputDevice(s: AsyncOutputStream) =
     disconnectOutputDevice OutputStream(s)
 
+template prepareSpan(s: OutputStream, minLen: int) =
+  s.span = s.buffers.prepare(s.buffers.nextAlignedSize(minLen))
+
+  # Count the full span so that when span.len decreases as data gets written,
+  # we can compute the total number of written bytes without having to
+  # update another counter at each write
+  s.spanEndPos += s.span.len
+
+template commitSpan(s: OutputStream, span: PageSpan) =
+  # Adjust position to discount the uncommitted bytes, now that the span is
+  # being reset
+  s.spanEndPos -= span.len
+  s.buffers.commit(span)
+  span.reset()
+
 template flushImpl(s: OutputStream, awaiter, writeOp, flushOp: untyped) =
   fsAssert s.extCursorsCount == 0
   if s.vtable != nil:
     if s.buffers != nil:
-      let runway = s.span.len
-      trackWrittenTo(s.buffers, s.span.startAddr)
+      s.commitSpan(s.span)
       awaiter s.vtable.writeOp(s, nil, 0)
-      s.span = getWritableSpan(s.buffers)
-      s.spanEndPos = s.spanEndPos - runway + s.span.len
 
     if s.vtable.flushOp != nil:
       awaiter s.vtable.flushOp(s)
@@ -172,13 +189,6 @@ proc `=destroy`*(h: var OutputStreamHandle) {.raises: [].} =
 converter implicitDeref*(h: OutputStreamHandle): OutputStream =
   h.s
 
-proc addPage(s: OutputStream) =
-  let
-    nextPageSize = s.buffers.pageSize
-    nextPage = s.buffers.addWritablePage(nextPageSize)
-  s.span = nextPage.fullSpan
-  s.spanEndPos += nextPageSize
-
 template makeHandle*(sp: OutputStream): OutputStreamHandle =
   let s = sp
   OutputStreamHandle(s: s)
@@ -187,7 +197,7 @@ proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
   fsAssert pageSize > 0
   # We are not creating an initial output page, because `ensureRunway`
   # can determine the most appropriate size.
-  makeHandle OutputStream(buffers: initPageBuffers(pageSize))
+  makeHandle OutputStream(buffers: PageBuffers.init(pageSize))
 
 proc unsafeMemoryOutput*(buffer: pointer, len: Natural): OutputStreamHandle =
   let buffer = cast[ptr byte](buffer)
@@ -206,8 +216,8 @@ proc ensureRunway*(s: OutputStream, neededRunway: Natural) =
     # it will have a large enough size to hold the data you are
     # feeding to it.
     fsAssert s.buffers != nil, "Unsafe memory output of insufficient size"
-    s.buffers.ensureRunway(s.span, neededRunway)
-    s.spanEndPos = s.spanEndPos - runway + s.span.len
+    s.commitSpan(s.span)
+    s.prepareSpan(neededRunway)
 
 when fsAsyncSupport:
   template ensureRunway*(s: AsyncOutputStream, neededRunway: Natural) =
@@ -299,7 +309,7 @@ proc fileOutput*(f: File,
                 {.raises: [IOError].} =
   makeHandle FileOutputStream(
     vtable: vtableAddr fileOutputVTable,
-    buffers: initPageBuffers(pageSize),
+    buffers: if pageSize > 0: PageBuffers.init(pageSize) else: nil,
     file: f,
     allowAsyncOps: allowAsyncOps)
 
@@ -319,8 +329,9 @@ when fsAsyncSupport:
 
 proc getBuffers*(s: OutputStream): PageBuffers =
   fsAssert s.buffers != nil
-  s.buffers.trackWrittenTo s.span.startAddr
-  return s.buffers
+  s.commitSpan(s.span)
+
+  s.buffers
 
 proc recycleBuffers*(s: OutputStream, buffers: PageBuffers) =
   if buffers != nil:
@@ -335,146 +346,78 @@ proc recycleBuffers*(s: OutputStream, buffers: PageBuffers) =
       bufferPage.writtenTo = 0
       bufferPage.consumedTo = 0
 
-      s.span = bufferPage.fullSpan
+      s.span = bufferPage.prepare()
       s.spanEndPos = s.span.len
       return
   else:
-    s.buffers = initPageBuffers(defaultPageSize)
+    s.buffers = PageBuffers.init(defaultPageSize)
 
   s.span = default(PageSpan)
   s.spanEndPos = 0
 
-#
 # Pre-conditions for `drainAllBuffers(Sync/Async)`
 #  * The cursor has reached the current span end
 #  * We are working with a vtable-enabled stream
 #
 # Post-conditions:
 #  * All completed pages are written
-#  * There is a fresh page ready for writing at the top
-#    (we can reuse a previously existing page for this)
-#  * The stream cursor is re-initialized at the start of the top page
-#
+
 proc drainAllBuffersSync(s: OutputStream, buf: pointer, bufSize: Natural) =
   s.vtable.writeSync(s, buf, bufSize)
-  if s.buffers != nil:
-    s.span = s.buffers.getWritableSpan()
-    s.spanEndPos += s.span.len
 
 when fsAsyncSupport:
   proc drainAllBuffersAsync(s: OutputStream, buf: pointer, bufSize: Natural) {.async.} =
     fsAwait s.vtable.writeAsync(s, buf, bufSize)
-    s.span = s.buffers.getWritableSpan()
-    s.spanEndPos += s.span.len
 
-proc createCursor(s: OutputStream, size: int): WriteCursor =
+proc createCursor(s: OutputStream, span, spill: PageSpan): WriteCursor =
   inc s.extCursorsCount
 
-  let
-    # The start address matches the current stream main cursor location
-    startAddr = s.span.startAddr
-    endAddr = offset(startAddr, size)
-
-  result = WriteCursor(
-    stream: s,
-    span: PageSpan(startAddr: startAddr, endAddr: endAddr))
-
-  # Adjust the stream main cursor to point past the end
-  # of the newly created cursor:
-  s.span.startAddr = endAddr
+  WriteCursor(stream: s, span: span, spill: spill)
 
 proc delayFixedSizeWrite*(s: OutputStream, cursorSize: Natural): WriteCursor =
   let runway = s.span.len
-  if cursorSize <= runway:
-    result = createCursor(s, cursorSize)
-  elif runway == 0:
-    # This is a special case of requesting a cursor right at the page boundary.
-    # We can safely create a non-split cursor on a new page:
-    let
-      nextPageSize = nextAlignedSize(cursorSize, s.buffers.pageSize)
-      nextPage = s.buffers.addWritablePage(nextPageSize)
-      nextPageSpan = nextPage.fullSpan
-      cursorEndAddr = offset(nextPageSpan.startAddr, cursorSize)
 
-    inc s.extCursorsCount
-    result = WriteCursor(stream: s,
-                         span: PageSpan(startAddr: nextPageSpan.startAddr,
-                                        endAddr: cursorEndAddr))
-
-    s.span = PageSpan(startAddr: cursorEndAddr, endAddr: nextPageSpan.endAddr)
-    s.spanEndPos += nextPageSize
+  if s.buffers == nil:
+    fsAssert cursorSize <= runway
+    # Without buffers, we'll simply mark the part of the span as written and
+    # move on
+    createCursor(s, s.span.split(cursorSize), PageSpan())
   else:
-    result = createCursor(s, runway)
+    # Commit what's already been written to the local span, in case a flush
+    # happens
+    s.commitSpan(s.span)
 
-    let
-      runwayDeficit = cursorSize - runway
-      nextPageSize = nextAlignedSize(runwayDeficit, s.buffers.pageSize)
-      nextPage = s.buffers.addWritablePage(nextPageSize)
-      nextPageSpan = nextPage.fullSpan
+    let capacity = s.buffers.capacity()
+    if cursorSize <= capacity or capacity == 0:
+      # A single page buffer will be enough to cover the cursor
+      var span = s.buffers.reserve(cursorSize)
+      s.spanEndPos += span.len
 
-    s.span = PageSpan(startAddr: offset(nextPageSpan.startAddr, runwayDeficit),
-                      endAddr: nextPageSpan.endAddr)
+      createCursor(s, span, PageSpan())
+    else:
+      # There is some capacity in the page buffer but not enough for the full
+      # cursor - create a split cursor that references two memory areas
+      var
+        span = s.buffers.reserve(capacity)
+        spill = s.buffers.reserve(cursorSize - capacity)
+      s.spanEndPos += span.len + spill.len
 
-    # See the explanation about split cursors above
-    nextPage.consumedTo = -runwayDeficit
 
-    s.spanEndPos += nextPageSize
+      createCursor(s, span, spill)
 
-proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor {.
-    deprecated: "missing test coverage in combination with ensureRunway".} =
+proc delayVarSizeWrite*(s: OutputStream, maxSize: Natural): VarSizeWriteCursor =
   ## Please note that using variable sized writes are not supported
   ## for unbuffered streams and unsafe memory inputs.
   fsAssert s.buffers != nil
 
-  let runway = s.span.len
-  if maxSize <= runway:
-    let
-      startAddr = s.span.startAddr
-      endAddr = offset(startAddr, maxSize)
-
-    inc s.extCursorsCount
-    result = VarSizeWriteCursor WriteCursor(
-      stream: s,
-      span: PageSpan(startAddr: startAddr, endAddr: endAddr))
-
-    s.buffers.splitLastPageAt(endAddr)
-    s.span.startAddr = endAddr
-
-  else:
-    trackWrittenTo(s.buffers, s.span.startAddr)
-
-    let
-      nextPageSize = nextAlignedSize(maxSize, s.buffers.pageSize)
-      nextPage = allocWritablePage(nextPageSize, maxSize)
-      nextPageSpan = nextPage.fullSpan
-      cursorEndAddr = offset(nextPageSpan.startAddr, maxSize)
-
-    s.buffers.queue.addLast nextPage
-
-    inc s.extCursorsCount
-    result = VarSizeWriteCursor WriteCursor(
-      stream: s,
-      span: PageSpan(startAddr: nextPageSpan.startAddr,
-                     endAddr: cursorEndAddr))
-
-    s.span = PageSpan(startAddr: cursorEndAddr,
-                      endAddr: nextPageSpan.endAddr)
-    s.spanEndPos = s.spanEndPos - runway + nextPageSize
+  VarSizeWriteCursor s.delayFixedSizeWrite(maxSize)
 
 proc getWritableBytesOnANewPage(s: OutputStream, spanSize: Natural): ptr byte =
   fsAssert s.buffers != nil
+  s.commitSpan(s.span)
 
-  trackWrittenTo(s.buffers, s.span.startAddr)
+  s.prepareSpan(spanSize)
 
-  let
-    nextPageSize = nextAlignedSize(spanSize, s.buffers.pageSize)
-    nextPage = allocWritablePage(nextPageSize, spanSize)
-
-  s.buffers.queue.addLast nextPage
-
-  let retiredSpanRunway = s.span.len
-  s.span = nextPage.fullSpan
-  s.spanEndPos += nextPageSize - retiredSpanRunway
   s.span.startAddr
 
 template getWritableBytes*(sp: OutputStream, spanSizeParam: Natural): var openArray[byte] =
@@ -492,10 +435,6 @@ template getWritableBytes*(sp: OutputStream, spanSizeParam: Natural): var openAr
   ## While it's not illegal to issue other writing operations to the stream during
   ## the `getWritetableBytes` -> `advance` sequence, doing this is not recommended
   ## because it will result in overwriting the same range of bytes.
-  ##
-  ## One limitation of this API is that the returned `openArray` will be considered
-  ## read-only by Nim. You may need to use `unsafeAddr` in your writing functions
-  ## to get around this limitation.
   let
     s = sp
     spanSize = spanSizeParam
@@ -511,56 +450,7 @@ proc advance*(s: OutputStream, bytesWrittenToWritableSpan: Natural) =
   ## Advance the stream write cursor.
   ## Typically used after a previous call to `getWritableBytes`.
   fsAssert bytesWrittenToWritableSpan <= s.span.len
-  s.span.startAddr = offset(s.span.startAddr, bytesWrittenToWritableSpan)
-
-proc tryMovingToNextPage(c: var WriteCursor) =
-  # A split cursor is a fixed-size cursor that ended up on page boundary.
-  #
-  # Part of the cursor used the last few bytes of the first page and we've
-  # left some empty space at the beginning of the second page.
-  #
-  # Even if the cursor size was very large, we've made sure the next
-  # page is big enough to hold all the data. When we created the cursor,
-  # we've taken a note regarding the number of bytes on the second page
-  # that are reserved by writing them as a negative value for the page
-  # `consumedTo`.
-  #
-  # All we need to do here is update the cursor span to point to the next
-  # page and set the now final `endAddr`. The page `consumedTo` is updated
-  # to 0 to indicate that the cursor has made the flip.
-  #
-  # If you are wondering, var-sized cursors cannot be split, because our
-  # strategy is to always place them at the beggining or end of pages.
-  #
-  # When we try to create a var-sized cursor, we check if there are enough
-  # bytes on the current page to contain the worst case scenario (the var
-  # sized cursor has an upper size limit). If there are enough bytes, we
-  # end the page prematurely (it will end up with an `writtenTo`). We can
-  # then recycle the same memory for the next page that will use an adjusted
-  # `consumedTo`. The `writtenTo` of the first page will be written when
-  # the cursor is finalized and its final size becomes known.
-  #
-  # If there weren't enough bytes (a much more rare event), we allocate a
-  # new page. We adjust the `writtenTo` of the current page to mark it's
-  # premature end and we mark the cursor as special by writing a
-
-  # The split cursor is definetely not on the last page, so we can iterate
-  # only over the preceeding pages to find where it was:
-  var prevPage = c.stream.buffers.queue[0]
-  for i in 1 ..< c.stream.buffers.queue.len:
-    let page = c.stream.buffers.queue[i]
-    if c.span.endAddr == prevPage.allocationEnd and page.consumedTo < 0:
-      # We found what we need, so let's get to business:
-      c.span.startAddr = page.allocationStart
-      c.span.endAddr = offset(c.span.startAddr, -page.consumedTo)
-      page.consumedTo = 0
-      return
-    prevPage = page
-
-  # We didn't find any page that this cursor was ending, so this is not
-  # a split cursor. This means that the user just tried to write past the
-  # pre-allocated cursor span, which is considered a Defect (a range error)
-  fsAssert false, "Attempt to write past the end of a cursor"
+  s.span.advance(bytesWrittenToWritableSpan)
 
 template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp: untyped) =
   if s.buffers == nil:
@@ -573,21 +463,14 @@ template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp:
     # ready to flush due to outstanding delayed writes or this is
     # just a memory output stream. In both cases, we just need to
     # allocate more memory and continue writing:
-    addPage(s)
-    writeByte(s.span, b)
+    s.commitSpan(s.span)
+    s.prepareSpan(s.buffers.pageSize)
+    write(s.span, b)
   else:
-    trackWrittenToEnd(s.buffers)
+    s.commitSpan(s.span)
     awaiter drainOp(s, nil, 0)
-    writeByte(s.span, b)
-
-proc write*(c: var WriteCursor, b: byte) =
-  if atEnd(c.span):
-    # The cursor has reached the end of its buffer, but it may be a
-    # split cursor. If that's the case, the following function will
-    # succeed. If that's not a split cursor, we'll raise a Defect.
-    tryMovingToNextPage(c)
-
-  writeByte(c.span, b)
+    s.prepareSpan(s.buffers.pageSize)
+    write(s.span, b)
 
 proc writeToNewSpan(s: OutputStream, b: byte) =
   writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
@@ -595,7 +478,7 @@ proc writeToNewSpan(s: OutputStream, b: byte) =
 template write*(sp: OutputStream, b: byte) =
   let s = sp
   if hasRunway(s.span):
-    writeByte(s.span, b)
+    write(s.span, b)
   else:
     writeToNewSpan(s, b)
 
@@ -603,7 +486,9 @@ when fsAsyncSupport:
   proc write*(sp: AsyncOutputStream, b: byte) =
     let s = OutputStream sp
     if atEnd(s.span):
-      addPage(s)
+      s.commitSpan(s.span)
+      s.prepareSpan()
+
     writeByte(s.span, b)
 
   template writeAndWait*(sp: AsyncOutputStream, b: byte) =
@@ -621,28 +506,16 @@ template write*(s: OutputStream|var WriteCursor, x: char) =
   write s, byte(x)
 
 proc writeToANewPage(s: OutputStream, bytes: openArray[byte]) =
-  var
-    runway = s.span.len
-    inputPos = baseAddr(bytes)
-    inputLen = bytes.len
-
-  template reduceInput(delta: int) =
-    inputPos = offset(inputPos, delta)
-    inputLen -= delta
+  let runway = s.span.len
+  fsAssert bytes.len > runway
 
   if runway > 0:
-    copyMem(s.span.startAddr, inputPos, runway)
-    reduceInput runway
-  fsAssert s.buffers != nil
+    s.span.write(bytes.toOpenArray(0, runway - 1))
 
-  let nextPageSize = nextAlignedSize(inputLen, s.buffers.pageSize)
-  let nextPage = s.buffers.addWritablePage(nextPageSize)
+  s.commitSpan(s.span)
+  s.prepareSpan(bytes.len - runway)
 
-  s.span = nextPage.fullSpan
-  s.spanEndPos += nextPageSize
-
-  copyMem(s.span.startAddr, inputPos, inputLen)
-  s.span.startAddr = offset(s.span.startAddr, inputLen)
+  s.span.write(bytes.toOpenArray(runway, bytes.len - 1))
 
 template writeBytesImpl(s: OutputStream,
                         bytes: openArray[byte],
@@ -654,15 +527,16 @@ template writeBytesImpl(s: OutputStream,
   # short enough to fit in the current page. We'll keep buffering until the
   # page is full:
   let runway = s.span.len
+
   if inputLen <= runway:
-    copyMem(s.span.startAddr, baseAddr(bytes), inputLen)
-    s.span.startAddr = offset(s.span.startAddr, inputLen)
+    s.span.write(bytes)
   elif s.vtable == nil or s.extCursorsCount > 0:
     # We are not ready to flush, so we must create pending pages.
     # We'll try to create them as large as possible:
+
     s.writeToANewPage(bytes)
   else:
-    trackWrittenTo(s.buffers, s.span.startAddr)
+    s.commitSpan(s.span)
     drainOp
 
 proc write*(s: OutputStream, bytes: openArray[byte]) =
@@ -670,7 +544,7 @@ proc write*(s: OutputStream, bytes: openArray[byte]) =
     drainAllBuffersSync(s, baseAddr(bytes), bytes.len)
 
 proc write*(s: OutputStream, chars: openArray[char]) =
-  write s, charsToBytes(chars)
+  write s, chars.toOpenArrayByte(0, chars.high())
 
 proc write*(s: MaybeAsyncOutputStream, value: string) {.inline.} =
   write s, value.toOpenArrayByte(0, value.len - 1)
@@ -697,11 +571,11 @@ when fsAsyncSupport:
 
   proc writeBytesAsyncImpl(s: OutputStream,
                           chars: openArray[char]): Future[void] =
-    writeBytesAsyncImpl s, charsToBytes(chars)
+    writeBytesAsyncImpl s, chars.toOpenArrayByte(0, chars.high())
 
   proc writeBytesAsyncImpl(s: OutputStream,
                           str: string): Future[void] =
-    writeBytesAsyncImpl s, toOpenArray(str, 0, str.len - 1)
+    writeBytesAsyncImpl s, str.toOpenArrayByte(0, str.high())
 
 template writeAndWait*(s: OutputStream, value: untyped) =
   write s, value
@@ -716,123 +590,86 @@ when fsAsyncSupport:
 
     if f != nil:
       fsAwait(f)
-      s.span = getWritableSpan s.buffers
-      s.spanEndPos += s.span.len
 
   template writeMemCopyAndWait*(sp: AsyncOutputStream, value: auto) =
     writeAndWait(sp, memCopyToBytes(value))
 
-proc writeBytesToCursor(c: var WriteCursor, bytes: openArray[byte]) =
-  # https://github.com/nim-lang/Nim/issues/22149
-  #
-  # Nim represents a zero-length openArray as a (NULL, 0) base+length tuple.
-  #
-  # https://gcc.gnu.org/gcc-4.9/porting_to.html
-  # "The pointers passed to memmove (and similar functions in <string.h>) must
-  # be non-null even when nbytes==0, so GCC can use that information to remove
-  # the check after the memmove call."
-  #
-  # https://en.cppreference.com/w/cpp/string/byte/memcpy
-  # "If either dest or src is an invalid or null pointer, the behavior is
-  # undefined, even if count is zero."
-  if bytes.len == 0:
-    return
+proc write*(c: var WriteCursor, bytes: openArray[byte]) =
+  var remaining = bytes.len
+  if remaining > 0:
+    let written = min(remaining, c.span.len)
+    c.span.write(bytes.toOpenArray(0, written - 1))
 
-  var
-    runway = c.span.len
-    inputPos = baseAddr(bytes)
-    inputLen = bytes.len
+    if c.span.len == 0 and c.stream.buffers != nil:
+      c.stream.commitSpan(c.span)
 
-  template reduceInput(delta: int) =
-    inputPos = offset(inputPos, delta)
-    inputLen -= delta
+    if written < remaining:
+      # c.span is full - commit it and move to the spill
+      # Reaching this point implies we have buffers backing the span
+      remaining -= written
 
-  if inputLen <= runway:
-    copyMem(c.span.startAddr, inputPos, inputLen)
-    c.span.startAddr = offset(c.span.startAddr, inputLen)
-  else:
-    # This must be a split cursor. We need to complete its first page first,
-    # then switch to the second and continue the write there.
-    copyMem(c.span.startAddr, baseAddr(bytes), runway)
-    reduceInput runway
-    # If this really is a split cursor, the following operation will succeed.
-    # Otherwise, it will Defect and the conclusion is that this was a write
-    # past the cursor end.
-    c.tryMovingToNextPage()
-    # On the next page, we have a new runway
-    runway = c.span.len
-    # The write shouldn't go past the end of the new runway
-    fsAssert inputLen <= runway
-    copyMem(c.span.startAddr, inputPos, inputLen)
-    c.span.startAddr = offset(c.span.startAddr, inputLen)
+      c.span = c.spill
+      c.spill.reset()
 
-template write*(c: var WriteCursor, bytes: openArray[byte]) =
-  bind writeBytesToCursor
-  writeBytesToCursor(c, bytes)
+      c.span.write(bytes.toOpenArray(written, bytes.len - 1))
 
-proc write*(c: var WriteCursor, chars: openArray[char]) {.inline.} =
-  writeBytesToCursor(c, chars.toOpenArrayByte(0, chars.len - 1))
+      if c.span.len == 0 and c.stream.buffers != nil:
+        c.stream.commitSpan(c.span)
+
+proc write*(c: var WriteCursor, b: byte) =
+  write(c, [b])
+
+proc write*(c: var WriteCursor, chars: openArray[char]) =
+  write(c, chars.toOpenArrayByte(0, chars.len - 1))
 
 proc writeMemCopy*[T](c: var WriteCursor, value: T) =
-  writeBytesToCursor(c, memCopyToBytes(value))
+  write(c, memCopyToBytes(value))
 
 proc write*(c: var WriteCursor, str: string) =
-  writeBytesToCursor(c, str.toOpenArrayByte(0, str.len - 1))
+  write(c, str.toOpenArrayByte(0, str.len - 1))
 
-proc finalize*(cursor: var WriteCursor) =
-  fsAssert cursor.stream.extCursorsCount > 0
-  dec cursor.stream.extCursorsCount
+proc finalize*(c: var WriteCursor) =
+  fsAssert c.stream.extCursorsCount > 0
 
-proc finalWrite*(cursor: var WriteCursor, data: openArray[byte]) =
-  cursor.writeBytesToCursor(data)
-  fsAssert cursor.span.len == 0
-  finalize cursor
+  dec c.stream.extCursorsCount
+
+proc finalWrite*(c: var WriteCursor, data: openArray[byte]) =
+  c.write(data)
+  finalize c
+
+proc write*(c: var VarSizeWriteCursor, b: byte) {.borrow.}
+proc write*(c: var VarSizeWriteCursor, bytes: openArray[byte]) {.borrow.}
+proc write*(c: var VarSizeWriteCursor, chars: openArray[char]) {.borrow.}
+proc writeMemCopy*[T](c: var VarSizeWriteCursor, value: T) =
+  writeMemCopy(WriteCursor(c), value)
+
+proc write*(c: var VarSizeWriteCursor, str: string)  {.borrow.}
+
+proc finalize*(c: var VarSizeWriteCursor) =
+  fsAssert WriteCursor(c).stream.extCursorsCount > 0
+
+  dec WriteCursor(c).stream.extCursorsCount
+
+  if WriteCursor(c).span.startAddr != nil:
+    WriteCursor(c).stream.commitSpan(WriteCursor(c).span)
+
+  if WriteCursor(c).spill.startAddr != nil:
+    WriteCursor(c).stream.commitSpan(WriteCursor(c).spill)
 
 proc finalWrite*(c: var VarSizeWriteCursor, data: openArray[byte]) =
-  # TODO ensure adding early-return for zero-length input is safe, or if not,
-  # what is. It can't make it all the way to copyMem, though, regardless, and
-  # remain non-UB.
-
-  template cursor: auto = WriteCursor(c)
-
-  let overestimatedBytes = cursor.span.len - data.len
-  fsAssert overestimatedBytes >= 0
-
-  WriteCursor(c).stream.spanEndPos -= overestimatedBytes
-
-  for page in items(cursor.stream.buffers.queue):
-    let baseAddr = page.allocationStart
-    if cursor.span.startAddr == baseAddr:
-      # This is page starting cursor
-      page.consumedTo = overestimatedBytes
-      copyMem(offset(baseAddr, overestimatedBytes), baseAddr(data), data.len)
-      finalize cursor
-      return
-
-    if page.readableEnd == cursor.span.endAddr:
-      # This is a page ending cursor
-      page.writtenTo = distance(baseAddr, cursor.span.startAddr) + data.len
-      copyMem(cursor.span.startAddr, baseAddr(data), data.len)
-      finalize cursor
-      return
-
-  fsAssert false
+  c.write(data)
+  finalize c
 
 type
   OutputConsumingProc = proc (data: openArray[byte])
                              {.gcsafe, raises: [].}
 
 proc consumeOutputsImpl(s: OutputStream, consumer: OutputConsumingProc) =
-  let runway = s.span.len
-
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
-  trackWrittenTo(s.buffers, s.span.startAddr)
+  s.commitSpan(s.span)
 
   for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
     consumer(makeOpenArray(pageReadableStart, pageLen))
-
-  s.span = getWritableSpan(s.buffers)
-  s.spanEndPos = s.spanEndPos - runway + s.span.len
 
 template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeOutputs` on an unbuffered stream
@@ -847,37 +684,34 @@ template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
 
 proc consumeContiguousOutputImpl(s: OutputStream, consumer: OutputConsumingProc) =
   var
-    runway = s.span.len
-    contigiousBytes: string
-      # this may remain null
-      # We are using a string, because `newStringOfCap` doesn't zero out
-      # the memory. TODO check if the same is true for `newSeqOfCap`.
+    bytes: seq[byte]
     bytesPtr: ptr byte
     bytesLen: int
 
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
-  s.buffers.trackWrittenTo s.span.startAddr
+  s.commitSpan(s.span)
 
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
     bytesPtr = page.readableStart
-    bytesLen = page.writtenTo - page.consumedTo
+    bytesLen = page.len
     # We need to reset the page to an empty state, so it can be reused
     page.consumedTo = 0
     page.writtenTo = 0
   else:
-    contigiousBytes = newStringOfCap(s.buffers.totalBufferedBytes)
+    bytes = newSeqUninit[byte](s.buffers.consumable())
+    var pos = 0
 
-    for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
-      contigiousBytes.add makeOpenArray(cast[ptr char](pageReadableStart), pageLen)
+    if bytes.len > 0:
+      for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
+        if pageLen > 0:
+          copyMem(addr bytes[pos], pageReadableStart, pageLen)
+          pos += pageLen
 
-    bytesPtr = cast[ptr byte](addr contigiousBytes[0])
-    bytesLen = contigiousBytes.len
+      bytesPtr = cast[ptr byte](addr bytes[0])
+      bytesLen = bytes.len
 
   consumer(makeOpenArray(bytesPtr, bytesLen))
-
-  s.span = s.buffers.getWritableSpan()
-  s.spanEndPos = s.spanEndPos - runway + s.span.len
 
 template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeContiguousOutput` on an unbuffered stream
@@ -898,11 +732,12 @@ proc getOutput*(s: OutputStream, T: type string): string =
   ## Before consuming the output, all outstanding delayed writes must be finalized.
   ##
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
-  s.buffers.trackWrittenTo s.span.startAddr
+  s.commitSpan(s.span)
 
   result = newStringOfCap(s.pos)
   for page in items(s.buffers.queue):
-    result.add page.pageChars
+    let len = page.data().len()
+    result.add page.data().toOpenArrayChar(0, len - 1)
 
 proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   ## Please note that calling `getOutput` on an unbuffered stream
@@ -911,7 +746,7 @@ proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   ## Before consuming the output, all outstanding delayed writes must be finalized.
   ##
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
-  s.buffers.trackWrittenTo s.span.startAddr
+  s.commitSpan(s.span)
 
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
@@ -923,11 +758,13 @@ proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
       s.buffers.queue.clear()
       return
 
-  result = newSeqUninitialized[byte](s.pos)
+  result = newSeqUninit[byte](s.pos)
+
   var pos = 0
   for page in items(s.buffers.queue):
-    let pageLen = page.pageLen()
-    copyMem(addr result[pos], page.readableStart(), pageLen)
+    let pageLen = page.len()
+    if pageLen > 0:
+      copyMem(addr result[pos], page.readableStart(), pageLen)
     pos += pageLen
 
 template getOutput*(s: OutputStream): seq[byte] =

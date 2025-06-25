@@ -121,7 +121,7 @@ proc writeHex*(s: OutputStream, bytes: openArray[byte]) =
     s.write hexChars[int b and 0xF]
 
 proc writeHex*(s: OutputStream, chars: openArray[char]) =
-  writeHex s, charsToBytes(chars)
+  writeHex s, chars.toOpenArrayByte(0, chars.high())
 
 const
   NewLines* = {'\r', '\n'}
@@ -150,7 +150,7 @@ proc readUntil*(s: InputStream,
   fsAssert readableNow(s)
   var res = ""
   while s.readable(sep.len):
-    if s.lookAheadMatch(charsToBytes(sep)):
+    if s.lookAheadMatch(sep.toOpenArrayByte(0, sep.high())):
       return some(res)
     res.add s.read.char
 
