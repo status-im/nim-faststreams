@@ -45,7 +45,7 @@ type
       ## Number of bytes written to the input sequence
     reservedTo*: Natural
       ## Number of bytes reserved for future writing
-    data*: ref seq[byte]
+    store*: ref seq[byte]
       ## Memory backing the page - allocated once and never resized to maintain
       ## pointer stability. Multiple pages may share the same buffer, which
       ## specially happens when reserving parts of a page for delayed writing.
@@ -99,15 +99,15 @@ when debugHelpers:
   proc describeBuffers*(context: static string, buffers: PageBuffers) =
     debugEcho context, " :: buffers"
     for page in buffers.queue:
-      debugEcho " page ", page.data[][page.consumedTo ..<
+      debugEcho " page ", page.store[][page.consumedTo ..<
                                       min(page.consumedTo + 16, page.writtenTo)]
-      debugEcho "  len = ", page.data[].len
+      debugEcho "  len = ", page.store[].len
       debugEcho "  start = ", page.consumedTo
       debugEcho "  written to = ", page.writtenTo
 
   func contents*(buffers: PageBuffers): seq[byte] =
     for page in buffers.queue:
-      result.add page.data[][page.consumedTo ..< page.writtenTo - 1]
+      result.add page.store[][page.consumedTo ..< page.writtenTo - 1]
 else:
   template describeBuffers*(context: static string, buffers: PageBuffers) =
     discard
@@ -178,7 +178,7 @@ template data*(span: var PageSpan): var openArray[byte] =
   makeOpenArray(span.startAddr, span.len())
 
 template allocationStart*(page: PageRef): ptr byte =
-  baseAddr page.data[]
+  baseAddr page.store[]
 
 func readableStart*(page: PageRef): ptr byte {.inline.} =
   offset(page.allocationStart(), page.consumedTo)
@@ -193,7 +193,7 @@ template writableStart*(page: PageRef): ptr byte =
   readableEnd(page)
 
 func allocationEnd*(page: PageRef): ptr byte {.inline.} =
-  offset(page.allocationStart(), page.data[].len)
+  offset(page.allocationStart(), page.store[].len)
 
 func reserved*(page: PageRef): bool {.inline.} =
   page.reservedTo > 0
@@ -206,7 +206,7 @@ func len*(page: PageRef): Natural {.inline} =
 func capacity*(page: PageRef): Natural {.inline.} =
   ## The amount of bytes that can be written to this page, ie what would be
   ## returned by `prepare`.
-  page.data[].len - page.writtenTo
+  page.store[].len - page.writtenTo
 
 template data*(pageParam: PageRef): openArray[byte] =
   ## Currnet input sequence, or what would be returned by `consume`
@@ -224,7 +224,7 @@ func prepare*(page: PageRef): PageSpan =
   ## `len` must not be greater than `page.capacity()`.
   let baseAddr = allocationStart(page)
   PageSpan(startAddr: offset(baseAddr, page.writtenTo),
-           endAddr: offset(baseAddr, page.data[].len))
+           endAddr: offset(baseAddr, page.store[].len))
 
 func prepare*(page: PageRef, len: Natural): PageSpan =
   ## Return a span representing the output sequence of this page, ie the
@@ -249,7 +249,7 @@ func commit*(page: PageRef) =
   ## Mark the span returned by `prepare` as committed, allowing it to be
   ## accessed by `consume`
   page.reservedTo = 0
-  page.writtenTo = page.data[].len()
+  page.writtenTo = page.store[].len()
 
 func commit*(page: PageRef, len: Natural) =
   ## Mark `len` prepared bytes as committed, allowing them to be accessed by
@@ -285,14 +285,14 @@ func unconsume(page: PageRef, len: int) =
   fsAssert len < page.consumedTo, "cannot unconsume more bytes than were consumed"
   page.consumedTo -= len
 
-func init*(_: type PageRef, data: ref seq[byte], pos: int): PageRef =
-  fsAssert data != nil and data[].len > 0
-  fsAssert pos <= data[].len
-  PageRef(data: data, consumedTo: pos, writtenTo: pos)
+func init*(_: type PageRef, store: ref seq[byte], pos: int): PageRef =
+  fsAssert store != nil and store[].len > 0
+  fsAssert pos <= store[].len
+  PageRef(store: store, consumedTo: pos, writtenTo: pos)
 
 func init*(_: type PageRef, pageSize: Natural): PageRef =
   fsAssert pageSize > 0
-  PageRef(data: allocRef newSeqUninit[byte](pageSize))
+  PageRef(store: allocRef newSeqUninit[byte](pageSize))
 
 func nextAlignedSize*(buffers: PageBuffers, len: Natural): Natural =
   nextAlignedSize(len, buffers.pageSize)
@@ -368,7 +368,7 @@ func reserve*(buffers: PageBuffers, len: Natural): PageSpan =
   page.reservedTo = page.writtenTo + len
 
   # The next `prepare` / `reserve` will go into a fresh part
-  buffers.queue.addLast PageRef.init(page.data, page.reservedTo)
+  buffers.queue.addLast PageRef.init(page.store, page.reservedTo)
 
   let
     startAddr = page.writableStart
@@ -491,7 +491,7 @@ func writableSpan*(page: PageRef): PageSpan {.deprecated: "prepare".} =
 
 func fullSpan*(page: PageRef): PageSpan {.deprecated: "data or prepare".} =
   let baseAddr = page.allocationStart
-  PageSpan(startAddr: baseAddr, endAddr: offset(baseAddr, page.data[].len))
+  PageSpan(startAddr: baseAddr, endAddr: offset(baseAddr, page.store[].len))
 
 template bumpPointer*(span: var PageSpan, numberOfBytes: Natural = 1) {.deprecated: "advance".}=
   span.advance(numberOfBytes)
@@ -522,7 +522,7 @@ func trackWrittenTo*(buffers: PageBuffers, spanHeadPos: ptr byte) {.deprecated: 
     buffers.commit(PageSpan(startAddr: spanHeadPos))
 
 template allocWritablePage*(pageSize: Natural, writtenToParam: Natural = 0): auto {.deprecated: "PageRef.init".} =
-  PageRef(data: allocRef newSeqUninit[byte](pageSize),
+  PageRef(store: allocRef newSeqUninit[byte](pageSize),
           writtenTo: writtenToParam)
 
 func addWritablePage*(buffers: PageBuffers, pageSize: Natural): PageRef {.deprecated: "prepare".} =
@@ -534,7 +534,7 @@ func getWritablePage*(buffers: PageBuffers,
                       preferredSize: Natural): PageRef {.deprecated: "prepare".} =
   if buffers.queue.len > 0:
     let lastPage = buffers.queue.peekLast
-    if lastPage.writtenTo < lastPage.data[].len:
+    if lastPage.writtenTo < lastPage.store[].len:
       return lastPage
 
   return addWritablePage(buffers, preferredSize)
@@ -602,7 +602,7 @@ func splitLastPageAt*(buffers: PageBuffers, address: ptr byte) {.deprecated: "re
     topPage = buffers.queue.peekLast
     splitPosition = distance(topPage.allocationStart, address)
     newPage = PageRef(
-      data: topPage.data,
+      store: topPage.store,
       consumedTo: splitPosition,
       writtenTo: splitPosition)
 
@@ -620,7 +620,7 @@ iterator consumePages*(buffers: PageBuffers): PageRef =
       # Should we do anything with the consumed page?
       yield page
 
-      if page.data[].len == buffers.pageSize:
+      if page.store[].len == buffers.pageSize:
         recycledPage = page
 
     discard buffers.queue.popFirst

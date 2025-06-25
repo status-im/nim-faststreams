@@ -736,8 +736,12 @@ proc getOutput*(s: OutputStream, T: type string): string =
 
   result = newStringOfCap(s.pos)
   for page in items(s.buffers.queue):
-    let len = page.data().len()
-    result.add page.data().toOpenArrayChar(0, len - 1)
+    let len = page.len()
+    when compiles(page.data().toOpenArrayChar(0, len - 1)):
+      result.add page.data().toOpenArrayChar(0, len - 1)
+    else:
+      let p = cast[ptr char](page.readableStart())
+      result.add makeOpenArray(p, len)
 
 proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   ## Please note that calling `getOutput` on an unbuffered stream
@@ -751,7 +755,7 @@ proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
     if page.consumedTo == 0:
-      result.swap page.data[]
+      result.swap page.store[]
       result.setLen page.writtenTo
       # We clear the buffers, so the stream will be in pristine state.
       # The next write is going to create a fresh new starting page.
