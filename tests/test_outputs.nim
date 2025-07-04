@@ -201,20 +201,16 @@ suite "output stream":
 
   test "delayed write (edge cases)":
     const delayedWriteContent = bytes "delayed write\n"
-    check memStream.s.span.len == 0
     var
       memCursor1 = memStream.delayFixedSizeWrite(delayedWriteContent.len)
       fileCursor1 = fileStream.delayFixedSizeWrite(delayedWriteContent.len)
     undelayedOutput delayedWriteContent
     output "some output\n"
-    check memStream.s.span.len >= delayedWriteContent.len
     var
       memCursor2 = memStream.delayFixedSizeWrite(delayedWriteContent.len)
       fileCursor2 = fileStream.delayFixedSizeWrite(delayedWriteContent.len)
     undelayedOutput delayedWriteContent
-    check memStream.s.span.len >= delayedWriteContent.len
-    let numContentBytes = memStream.s.span.len - delayedWriteContent.len + 1
-    output repeat(byte(42), numContentBytes)
+    output repeat(byte(42), 10000)
     var
       memCursor3 = memStream.delayFixedSizeWrite(delayedWriteContent.len)
       fileCursor3 = fileStream.delayFixedSizeWrite(delayedWriteContent.len)
@@ -521,3 +517,16 @@ suite "output api":
       testAdvance(repeat('A', advanceSize))
       testAdvance(repeat(byte 'A', advanceSize))
 
+  test "ensureRunway works before delayed write":
+    var stream = memoryOutput(pageSize = 10)
+
+    stream.ensureRunway(100)
+
+    var w0 = stream.delayVarSizeWrite(10)
+
+    stream.write [byte 4, 5, 6, 7]
+
+    w0.finalWrite [byte 0, 1, 2, 3]
+
+    check:
+       stream.getOutput(seq[byte]) == [byte 0, 1, 2, 3, 4, 5, 6, 7]

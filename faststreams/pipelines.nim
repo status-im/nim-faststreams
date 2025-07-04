@@ -35,7 +35,7 @@ when fsAsyncSupport:
     if buffers.eofReached: return 0
 
     var
-      bytesInBuffersAtStart = buffers.totalBufferedBytes
+      bytesInBuffersAtStart = buffers.consumable()
       minBytesExpected = max(1, dstLen)
       bytesInBuffersNow = bytesInBuffersAtStart
 
@@ -43,7 +43,7 @@ when fsAsyncSupport:
       awake buffers.waitingWriter
       buffers.waitingReader.enterWait "waiting for writer to buffer more data"
 
-      bytesInBuffersNow = buffers.totalBufferedBytes
+      bytesInBuffersNow = buffers.consumable()
       if buffers.eofReached:
         return bytesInBuffersNow - bytesInBuffersAtStart
 
