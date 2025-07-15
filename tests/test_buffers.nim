@@ -18,8 +18,8 @@ proc consumeAll(buf: PageBuffers): seq[byte] =
 # and therefore, tests may have to change in the future
 suite "PageBuffers":
   test "prepare/commit/consume":
-    let pageSize = 8
-    let buf = PageBuffers.init(8)
+    const pageSize = 8
+    let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 31]
 
     # Write in one go
@@ -35,7 +35,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "prepare/commit/consume with partial writes and reads":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 15] # 16 bytes, 2 pages
 
@@ -62,7 +62,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "reserve/commit/consume blocks until commit":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 7]
 
@@ -77,7 +77,7 @@ suite "PageBuffers":
     check @(r.data()) == input
 
   test "reserve/prepare/commit/consume interleaved":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let a = bytes256[0 .. 7]
     let b = bytes256[8 .. 15]
@@ -100,7 +100,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "multiple small writes and reads, crossing page boundaries":
-    let pageSize = 4
+    const pageSize = 4
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 11] # 12 bytes, 3 pages
 
@@ -121,7 +121,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "unconsume restores data":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 7]
 
@@ -141,7 +141,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "prepare with more than page size allocates larger page":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 15] # 16 bytes
 
@@ -153,7 +153,7 @@ suite "PageBuffers":
     check @(r.data()) == input
 
   test "reserve with more than page size allocates larger page":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 15] # 16 bytes
 
@@ -165,7 +165,7 @@ suite "PageBuffers":
     check @(r.data()) == input
 
   test "mix of prepare, reserve, commit, and consume with random order":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     var expected: seq[byte]
     var written: seq[(string, seq[byte], PageSpan)]
@@ -188,7 +188,7 @@ suite "PageBuffers":
     var idxs = @[0, 1, 2, 3]
     idxs.shuffle()
     for i in idxs:
-      let (kind, d, w) = written[i]
+      let (kind, _, w) = written[i]
       if kind == "reserve":
         buf.commit(w)
 
@@ -198,7 +198,7 @@ suite "PageBuffers":
     check consumeAll(buf) == expected
 
   test "consumePages iterator yields all data and recycles last page":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 23] # 24 bytes, 3 pages
 
@@ -207,15 +207,11 @@ suite "PageBuffers":
       w.write(input[i * 8 ..< ((i + 1) * 8)])
       buf.commit(w)
 
-    var seen: seq[byte]
-    for page in buf.consumePages():
-      seen.add page.data()
+    var seen = buf.consumeAll()
 
     check seen == input
     # After consuming, the buffer should have one recycled page
-    check buf.queue.len == 1
-    check buf.queue.peekLast.consumedTo == 0
-    check buf.queue.peekLast.writtenTo == 0
+    check buf.capacity() == pageSize
 
   test "consumePageBuffers yields correct pointers and lengths":
     let buf = PageBuffers.init(8)
@@ -236,7 +232,7 @@ suite "PageBuffers":
     check seen == input
 
   test "commit less than prepared within a single page":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 7]
 
@@ -259,7 +255,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "commit less than reserved, then reserve again in same page":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 7]
 
@@ -281,7 +277,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "commit less than prepared, crossing page boundary":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 15] # 16 bytes, 2 writes
 
@@ -303,7 +299,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "commit less than reserved, crossing page boundary, then reserve again":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let input = bytes256[0 .. 15] # 16 bytes
 
@@ -324,7 +320,7 @@ suite "PageBuffers":
     check buf.consumable() == 0
 
   test "commit less than prepared/reserved, then interleave with new writes":
-    let pageSize = 8
+    const pageSize = 8
     let buf = PageBuffers.init(pageSize)
     let a = bytes256[0 .. 7]
     let b = bytes256[8 .. 15]
@@ -359,3 +355,41 @@ suite "PageBuffers":
     r = buf.consume()
     check @(r.data()) == b[4 .. 7]
     check buf.consumable() == 0
+
+  test "recycle buffer after consuming it":
+    let buf = PageBuffers.init(8)
+
+    let p0 = buf.prepare(4)
+
+    buf.commit(p0)
+
+    discard buf.consume()
+
+    let p1 = buf.prepare(4)
+    check:
+      p0.startAddr == p1.startAddr
+
+  test "Consuming iterator stops at reservation":
+    let buf = PageBuffers.init(8)
+
+    var p0 = buf.prepare(4)
+    p0.write(bytes256[0 .. 3])
+    buf.commit(p0)
+
+    var r0 = buf.reserve(4)
+    r0.write(bytes256[0 .. 3])
+
+    var total = 0
+    for (_, len) in buf.consumePageBuffers:
+      total += len
+
+    check:
+      total == 4
+
+    buf.commit(r0)
+
+    for (_, len) in buf.consumePageBuffers:
+      total += len
+
+    check:
+      total == 8
