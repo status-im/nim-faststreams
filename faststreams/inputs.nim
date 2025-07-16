@@ -249,11 +249,10 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
     raise newException(IOError, err.msg, err)
 
 func getNewSpan(s: InputStream) =
-  let buffers = s.buffers
-  fsAssert buffers != nil
+  fsAssert s.buffers != nil
   fsAssert s.span.startAddr <= s.span.endAddr, "Buffer overrun in previous read!"
 
-  s.span = buffers.consume(s.maxBufferedBytes.get(int.high))
+  s.span = s.buffers.consume(s.maxBufferedBytes.get(int.high))
   s.spanEndPos += s.span.len
   if s.maxBufferedBytes.isSome():
     s.maxBufferedBytes.get() -= s.span.len
@@ -380,6 +379,7 @@ const fileInputVTable = InputStreamVTable(
   readSync: proc (s: InputStream, dst: pointer, dstLen: Natural): Natural
                  {.iocall.} =
     let file = FileInputStream(s).file
+    fsAssert s.span.len == 0, "writing to buffer invalidates `consume`"
     implementSingleRead(s.buffers, dst, dstLen,
                         {partialReadIsEof},
                         readStartAddr, readLen):
@@ -616,6 +616,10 @@ template readableNImpl(s, n, awaiter, readOp: untyped): bool =
       res = false
       bytesRead = Natural 0
       bytesDeficit = n - runway
+    # Return current span to buffers
+    if s.span.len > 0:
+      s.buffers.unconsume(s.span.len)
+      s.span.reset()
 
     while true:
       bytesRead += awaiter s.vtable.readOp(s, nil, bytesDeficit)
@@ -777,7 +781,6 @@ template readIntoExImpl(s: InputStream,
                         awaiter, readOp: untyped): Natural =
   let totalBytesDrained = drainBuffersInto(s, dst, dstLen)
   var bytesDeficit = (dstLen - totalBytesDrained)
-
   if bytesDeficit > 0 and s.vtable != nil:
     var adjustedDst = offset(dst, totalBytesDrained)
 
