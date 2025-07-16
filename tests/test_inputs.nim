@@ -251,7 +251,7 @@ suite "input stream":
           not s.readable()
 
     drainTest "unsafeMemoryInput":
-      var data = repeat(byte 5, 100)
+      const data = repeat(byte 5, 100)
       let s = unsafeMemoryInput(data)
 
     drainTest "memoryInput":
