@@ -62,7 +62,8 @@ type
     ## into structured data.
     ##
     ## Pages are kept in a deque. New pages are prepared as needed when writing,
-    ## and fully consumed pages are removed after reading.
+    ## and fully consumed pages are removed after reading, except for the last
+    ## one that is recycled for the next write.
     ##
     ## Pages can also be reserved to delay the writing of a prefix while data
     ## is being buffered. In such cases, writing can continue but reading will
@@ -198,7 +199,7 @@ func allocationEnd*(page: PageRef): ptr byte {.inline.} =
 func reserved*(page: PageRef): bool {.inline.} =
   page.reservedTo > 0
 
-func len*(page: PageRef): Natural {.inline} =
+func len*(page: PageRef): Natural {.inline.} =
   ## The number of bytes that can be read from this page, ie what would be
   ## returned by `consume`.
   page.writtenTo - page.consumedTo
@@ -208,6 +209,22 @@ func capacity*(page: PageRef): Natural {.inline.} =
   ## returned by `prepare`.
   page.store[].len - page.writtenTo
 
+func recycledCapacity(page: PageRef, isSingle: bool): Natural {.inline.} =
+  if isSingle and page.consumedTo == page.writtenTo:
+    page.store[].len
+  else:
+    page.store[].len - page.writtenTo
+
+func recycle(page: PageRef, isSingle: bool): Natural =
+  # To recycle, we must have committed all reservations and consumed all data
+  # leading up to this buffer
+  if isSingle and page.consumedTo == page.writtenTo:
+    page.consumedTo = 0
+    page.writtenTo = 0
+    page.store[].len
+  else:
+    page.store[].len - page.writtenTo
+
 template data*(pageParam: PageRef): openArray[byte] =
   ## Currnet input sequence, or what would be returned by `consume`
   let page = pageParam
@@ -216,15 +233,15 @@ template data*(pageParam: PageRef): openArray[byte] =
 
 func prepare*(page: PageRef): PageSpan =
   ## Return a span representing the output sequence of this page, ie the
-  ## of space available for writing, limited to `len` bytes.
+  ## of space available for writing.
   ##
   ## After writing data to the span, `commit` should be called with the number
   ## of bytes written (or the advanced span).
-  ##
-  ## `len` must not be greater than `page.capacity()`.
   let baseAddr = allocationStart(page)
-  PageSpan(startAddr: offset(baseAddr, page.writtenTo),
-           endAddr: offset(baseAddr, page.store[].len))
+  PageSpan(
+    startAddr: offset(baseAddr, page.writtenTo),
+    endAddr: offset(baseAddr, page.store[].len),
+  )
 
 func prepare*(page: PageRef, len: Natural): PageSpan =
   ## Return a span representing the output sequence of this page, ie the
@@ -258,7 +275,7 @@ func commit*(page: PageRef, len: Natural) =
   page.reservedTo = 0
   page.writtenTo += len
 
-func consume*(page: PageRef, maxLen = Natural.high()): PageSpan =
+func consume*(page: PageRef, maxLen: Natural): PageSpan =
   ## Consume up to `maxLen` bytes committed to this page returning the
   ## corresponding span. May return a span shorter than `maxLen`.
   ##
@@ -277,12 +294,14 @@ func consume*(page: PageRef): PageSpan =
   ##
   ## The span remains valid until the next consume call.
 
+  # Although page.consumedTo == page.writtenTo after this operation, we don't
+  # recycle the page just yet since `unconsume` might give some of the bytes back
   page.consume(page.len)
 
 func unconsume(page: PageRef, len: int) =
   ## Return bytes from the last `consume` call to the Page, making them available
   ## for reading again.
-  fsAssert len < page.consumedTo, "cannot unconsume more bytes than were consumed"
+  fsAssert len <= page.consumedTo, "cannot unconsume more bytes than were consumed"
   page.consumedTo -= len
 
 func init*(_: type PageRef, store: ref seq[byte], pos: int): PageRef =
@@ -299,46 +318,37 @@ func nextAlignedSize*(buffers: PageBuffers, len: Natural): Natural =
 
 func capacity*(buffers: PageBuffers): int =
   if buffers.queue.len > 0:
-    buffers.queue.peekLast.capacity()
+    buffers.queue.peekLast.recycledCapacity(buffers.queue.len == 1)
   else:
     0
 
-func prepare*(buffers: PageBuffers): PageSpan =
-  ## Return the largest contiguous writable memory area currently available or
-  ## allocate a new page if there is no space.
-  ##
-  ## `capacity` can be used to check how much space is available allocation-free
-  ## before calling `prepare`.
-  ##
-  ## Calling `prepare` multiple times without a `commit` in between will result
-  ## in the same span being returned.
-  if buffers.queue.len() == 0 or buffers.queue.peekLast().capacity() == 0:
-    buffers.queue.addLast PageRef.init(buffers.pageSize)
-
-  buffers.queue.peekLast().prepare()
-
-func prepare*(buffers: PageBuffers, minLen: Natural): PageSpan =
+func prepare*(buffers: PageBuffers, minLen: Natural = 1): PageSpan =
   ## Return a contiguous span of at least `minLen` bytes, switching to a
-  ## new page if need be.
+  ## new page if need be but otherwise returning the largest possible contiguous
+  ## memory area available for writing.
   ##
   ## The span returned by `prepare` remains valid until the next call to either
-  ## `reserve` or `commit`.
+  ## `reserve` or `commit` and is guaranteed to contain at least `capacity` or
+  ## `minLen` bytes, whichever is larger.
   ##
-  ## Calling prepare may result in space being wasted when the desired allocation
-  ## does not not fit in the current page. Use `prepare()` to avoid this situation
-  ## or call `prepare` with your best guess of the total maximum memory that will
-  ## be needed.
+  ## Calling prepare with `minLen` > 1 may result in space being wasted when the
+  ## desired allocation does not not fit in the current page. Use `prepare()` to
+  ## avoid this situation or make the initial call with your best guess of the
+  ## total maximum memory that will be needed.
   ##
   ## Calling `prepare` multiple times without a `commit` in between will result
   ## in the same span being returned.
-  if buffers.queue.len() == 0 or buffers.queue.peekLast().capacity() < minLen:
-      # Create a new buffer for the desired runway, ending the current buffer
-      # potentially without using its entire space because existing write
-      # cursors may point to the memory inside it.
-      # In git history, one can find code that moves data from the existing page
-      # data to the new buffer - this would be a good idea if it wasn't for the
-      # fact that it would invalidate pointers to the previous buffer.
 
+  # When there's only one page that is empty, we can be assume there are no
+  # reservations and it is therefore safe to update `writtenTo`.
+  if buffers.queue.len() == 0 or
+      buffers.queue.peekLast().recycle(buffers.queue.len() == 1) < minLen:
+    # Create a new buffer for the desired runway, ending the current buffer
+    # potentially without using its entire space because existing write
+    # cursors may point to the memory inside it.
+    # In git history, one can find code that moves data from the existing page
+    # data to the new buffer - this would be a good idea if it wasn't for the
+    # fact that it would invalidate pointers to the previous buffer.
     buffers.queue.addLast PageRef.init(buffers.nextAlignedSize(minLen))
 
   buffers.queue.peekLast().prepare()
@@ -361,7 +371,8 @@ func reserve*(buffers: PageBuffers, len: Natural): PageSpan =
     # buffer which would make finding the span (to commit it) tricky
     return PageSpan()
 
-  if buffers.queue.len() == 0 or buffers.queue.peekLast().capacity() < len:
+  if buffers.queue.len() == 0 or
+      buffers.queue.peekLast().recycle(buffers.queue.len() == 1) < len:
     buffers.queue.addLast PageRef.init(nextAlignedSize(len, buffers.pageSize))
 
   let page = buffers.queue.peekLast()
@@ -400,7 +411,7 @@ func commit*(buffers: PageBuffers, span: PageSpan) =
 
     if span.startAddr in page:
       if ridx < buffers.queue.len():
-        # A non-reserved page may share end address with the resered address of
+        # A non-reserved page may share end address with the reserved address of
         # the preceding page if the reservation exactly covers the end of a page
         # and no allocation has been done yet
         let page2 = buffers.queue[^(ridx + 1)]
@@ -418,40 +429,38 @@ func consumable*(buffers: PageBuffers): int =
   ## `consume` to get all of them!
   var len = 0
   for b in buffers.queue:
-    if b.reservedTo > 0:
-      break
-
     len += b.len
+
+    if b.reserved():
+      break
   len
 
 func consume*(buffers: PageBuffers, maxLen = int.high()): PageSpan =
   ## Return a span representing up to `maxLen` bytes from a single page. The
-  ## return span is valid until the next call to `consume`.
+  ## return span is valid until the next call to `consume`, `prepare` or `reserve`.
   ##
   ## Calling code should make no assumptions about the number of `consume` calls
   ## needed to consume a corresponding amount of commits - ie commits may be
   ## split and consolidated as optimizations and features are implemented.
-  var page: PageRef
   while buffers.queue.len > 0:
-    let tmp = buffers.queue.peekFirst()
-    if tmp.reservedTo > 0: # Page has been reserved and is waiting for a commit
+    let page = buffers.queue.peekFirst()
+    if page.len() > 0:
+      return page.consume(maxLen)
+
+    if page.reserved(): # The unconsumed parts of the page have been reserved
       break
 
-    if tmp.len() > 0:
-      page = tmp
+    if buffers.queue.len() == 1: # recycle the last page
       break
 
     discard buffers.queue.popFirst()
 
-  if page == nil:
-    PageSpan() # No ready pages
-  else:
-    page.consume(maxLen)
+  PageSpan() # No ready pages
 
 func unconsume*(buffers: PageBuffers, bytes: Natural) =
   ## Return bytes that were given by the previous call to `consume`
   fsAssert buffers.queue.len > 0
-  buffers.queue.peekFirst.consumedTo -= bytes
+  buffers.queue.peekFirst.unconsume(bytes)
 
 func write*(buffers: PageBuffers, val: openArray[byte]) =
   if val.len > 0:
@@ -484,7 +493,7 @@ template pageChars*(page: PageRef): var openArray[char] {.deprecated: "data".} =
   toOpenArray(baseAddr, page.consumedTo, page.writtenTo - 1)
 
 func pageLen*(page: PageRef): Natural {.deprecated: "len".} =
-  page.writtenTo - page.consumedTo
+  page.len()
 
 func writableSpan*(page: PageRef): PageSpan {.deprecated: "prepare".} =
   page.prepare()
@@ -612,7 +621,6 @@ func splitLastPageAt*(buffers: PageBuffers, address: ptr byte) {.deprecated: "re
 iterator consumePages*(buffers: PageBuffers): PageRef =
   fsAssert buffers != nil
 
-  var recycledPage: PageRef
   while buffers.queue.len > 0:
     var page = peekFirst(buffers.queue)
     if page.len > 0:
@@ -620,22 +628,24 @@ iterator consumePages*(buffers: PageBuffers): PageRef =
       # Should we do anything with the consumed page?
       yield page
 
-      if page.store[].len == buffers.pageSize:
-        recycledPage = page
+    if page.reserved():
+      discard page.consume()
+      break # Stop at the first active reservation
+
+    if buffers.len == 1:
+      # This was the last page - recycle it
+      discard page.consume()
+      break
 
     discard buffers.queue.popFirst
 
-  if recycledPage != nil:
-    recycledPage.consumedTo = 0
-    recycledPage.writtenTo = 0
-    buffers.queue.addLast recycledPage
-
 iterator consumePageBuffers*(buffers: PageBuffers): (ptr byte, Natural) =
   for page in consumePages(buffers):
-    yield (page.readableStart,
-           Natural(page.writtenTo - page.consumedTo))
+    yield (page.readableStart, page.len())
 
-template charsToBytes*(chars: openArray[char]): untyped {.deprecated: "multiple evaluation!".} =
+template charsToBytes*(
+    chars: openArray[char]
+): untyped {.deprecated: "multiple evaluation!".} =
   chars.toOpenArrayByte(0, chars.len - 1)
 
 type
