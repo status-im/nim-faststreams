@@ -393,3 +393,16 @@ suite "PageBuffers":
 
     check:
       total == 8
+
+  test "unconsume works in consumeAll":
+    let buf = PageBuffers.init(8)
+
+    buf.write(bytes256[0 .. 7])
+    buf.write(bytes256[8 .. 15])
+
+    for span in buf.consumeAll():
+      buf.unconsume(span.len())
+      break
+
+    check:
+      buf.consumeAll() == bytes256[0..15]

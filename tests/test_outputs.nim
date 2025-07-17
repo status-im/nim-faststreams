@@ -89,7 +89,7 @@ suite "output stream":
 
     let
       memStreamRes = memStream.getOutput
-      readFileRes = readFile(fileOutputPath).string.bytes
+      readFileRes = readFile(fileOutputPath).bytes
       fileInputRes = fileInput(fileOutputPath).readAllAndClose
       memFileInputRes = memFileInput(fileOutputPath).readAllAndClose
       fileInputWithSmallPagesRes = fileInput(fileOutputPath, pageSize = 10).readAllAndClose
@@ -129,7 +129,7 @@ suite "output stream":
     check nimSeq == fileInputWithSmallPagesRes
 
     when not skipUnbufferedFile:
-      let unbufferedFileRes = readFile(unbufferedFileOutputPath).string.bytes
+      let unbufferedFileRes = readFile(unbufferedFileOutputPath).bytes
       check nimSeq == unbufferedFileRes
 
   test "no appends produce an empty output":
@@ -359,6 +359,7 @@ suite "randomized tests":
                                                       varSizeVariance = varSizeVarianceExpr)
 
       when astToStr(customChecks) == "nil":
+        let pos = s.pos
         let streamResult = s.getOutput()
         let resultsMatch = streamResult == referenceResult
         when false:
@@ -369,7 +370,7 @@ suite "randomized tests":
       else:
         customChecks
 
-      check referenceResult.len == s.pos
+      check referenceResult.len == pos
 
   randomizedCursorsTest(memoryOutput(), FixedSize, 0)
   randomizedCursorsTest(memoryOutput(), VarSize, 100)
@@ -530,3 +531,24 @@ suite "output api":
 
     check:
        stream.getOutput(seq[byte]) == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+
+  test "getOutput drains the buffer":
+    var stream = memoryOutput(pageSize = 4)
+
+    stream.write([byte 0, 1, 2, 3])
+    stream.write([byte 4, 5, 6, 7])
+    check:
+       stream.getOutput(seq[byte]) == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+       stream.getOutput(seq[byte]) == []
+
+    stream.write([byte 0])
+    check:
+       stream.getOutput(seq[byte]) == [byte 0]
+       stream.getOutput(seq[byte]) == []
+
+    for i in 0..<128:
+      stream.write([byte i])
+
+    check:
+      stream.getOutput(seq[byte]).len == 128
+      stream.getOutput(seq[byte]) == []

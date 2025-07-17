@@ -238,8 +238,11 @@ template implementWrites*(buffersParam: PageBuffers,
     raise newException(IOError, "Failed to write all bytes to " & dstDesc)
 
   if buffers != nil:
-    for writeStartVar, writeLenVar in consumePageBuffers(s.buffers):
-      let bytesWritten = writeBlock
+    for span in s.buffers.consumeAll():
+      let
+        writeStartVar = span.startAddr
+        writeLenVar = span.len
+        bytesWritten = writeBlock
       # TODO: Can we repair the buffers here?
       if bytesWritten != writeLenVar: raiseError()
 
@@ -668,8 +671,9 @@ proc consumeOutputsImpl(s: OutputStream, consumer: OutputConsumingProc) =
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
   s.commitSpan(s.span)
 
-  for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
-    consumer(makeOpenArray(pageReadableStart, pageLen))
+  for span in s.buffers.consumeAll():
+    var span = span # var for template
+    consumer(span.data())
 
 template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeOutputs` on an unbuffered stream
@@ -683,35 +687,22 @@ template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   consumeOutputsImpl(s, consumer)
 
 proc consumeContiguousOutputImpl(s: OutputStream, consumer: OutputConsumingProc) =
-  var
-    bytes: seq[byte]
-    bytesPtr: ptr byte
-    bytesLen: int
-
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
   s.commitSpan(s.span)
 
   if s.buffers.queue.len == 1:
-    let page = s.buffers.queue[0]
-    bytesPtr = page.readableStart
-    bytesLen = page.len
-    # We need to reset the page to an empty state, so it can be reused
-    page.consumedTo = 0
-    page.writtenTo = 0
+    var span = s.buffers.consume()
+    consumer(span.data())
   else:
-    bytes = newSeqUninit[byte](s.buffers.consumable())
+    var bytes = newSeqUninit[byte](s.buffers.consumable())
     var pos = 0
 
     if bytes.len > 0:
-      for pageReadableStart, pageLen in consumePageBuffers(s.buffers):
-        if pageLen > 0:
-          copyMem(addr bytes[pos], pageReadableStart, pageLen)
-          pos += pageLen
+      for span in s.buffers.consumeAll():
+        copyMem(addr bytes[pos], span.startAddr, span.len )
+        pos += span.len
 
-      bytesPtr = cast[ptr byte](addr bytes[0])
-      bytesLen = bytes.len
-
-  consumer(makeOpenArray(bytesPtr, bytesLen))
+    consumer(bytes)
 
 template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeContiguousOutput` on an unbuffered stream
@@ -726,6 +717,9 @@ template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   consumeContiguousOutputImpl(s, consumer)
 
 proc getOutput*(s: OutputStream, T: type string): string =
+  ## Consume data written so far to the in-memory page buffer - this operation
+  ## is meaningful only for `memoryOutput` and leaves the page buffer empty.
+  ##
   ## Please note that calling `getOutput` on an unbuffered stream
   ## or an unsafe memory stream is considered a Defect.
   ##
@@ -735,41 +729,45 @@ proc getOutput*(s: OutputStream, T: type string): string =
   s.commitSpan(s.span)
 
   result = newStringOfCap(s.pos)
-  for page in items(s.buffers.queue):
-    let len = page.len()
-    when compiles(page.data().toOpenArrayChar(0, len - 1)):
-      result.add page.data().toOpenArrayChar(0, len - 1)
+  s.spanEndPos = 0
+
+  for span in s.buffers.consumeAll():
+    when compiles(span.data().toOpenArrayChar(0, len - 1)):
+      result.add span.data().toOpenArrayChar(0, len - 1)
     else:
-      let p = cast[ptr char](page.readableStart())
-      result.add makeOpenArray(p, len)
+      let p = cast[ptr char](span.startAddr)
+      result.add makeOpenArray(p, span.len)
 
 proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
+  ## Consume data written so far to the in-memory page buffer - this operation
+  ## is meaningful only for `memoryOutput` and leaves the page buffer empty.
+  ##
   ## Please note that calling `getOutput` on an unbuffered stream
   ## or an unsafe memory stream is considered a Defect.
   ##
   ## Before consuming the output, all outstanding delayed writes must be finalized.
-  ##
   fsAssert s.extCursorsCount == 0 and s.buffers != nil
   s.commitSpan(s.span)
 
   if s.buffers.queue.len == 1:
     let page = s.buffers.queue[0]
     if page.consumedTo == 0:
+      # "move" the buffer to the caller - swap works for all nim versions and gcs
       result.swap page.store[]
       result.setLen page.writtenTo
       # We clear the buffers, so the stream will be in pristine state.
       # The next write is going to create a fresh new starting page.
       s.buffers.queue.clear()
+      s.spanEndPos = 0
       return
 
   result = newSeqUninit[byte](s.pos)
+  s.spanEndPos = 0
 
   var pos = 0
-  for page in items(s.buffers.queue):
-    let pageLen = page.len()
-    if pageLen > 0:
-      copyMem(addr result[pos], page.readableStart(), pageLen)
-    pos += pageLen
+  for span in s.buffers.consumeAll():
+    copyMem(addr result[pos], span.startAddr, span.len)
+    pos += span.len
 
 template getOutput*(s: OutputStream): seq[byte] =
   s.getOutput(seq[byte])
