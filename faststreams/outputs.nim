@@ -683,7 +683,7 @@ template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ##
   ## Before consuming the outputs, all outstanding delayed writes must
   ## be finalized.
-  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [].} =
+  proc consumer(bytesVar: openArray[byte]) {.gensym, gcsafe, raises: [].} =
     body
 
   consumeOutputsImpl(s, consumer)
@@ -715,7 +715,7 @@ template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   ## Before consuming the output, all outstanding delayed writes must
   ## be finalized.
   ##
-  proc consumer(bytesVar: openArray[byte]) {.gcsafe, raises: [].} =
+  proc consumer(bytesVar: openArray[byte]) {.gensym, gcsafe, raises: [].} =
     body
 
   consumeContiguousOutputImpl(s, consumer)
