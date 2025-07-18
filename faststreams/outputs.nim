@@ -675,6 +675,8 @@ proc consumeOutputsImpl(s: OutputStream, consumer: OutputConsumingProc) =
     var span = span # var for template
     consumer(span.data())
 
+  s.spanEndPos = 0
+
 template consumeOutputs*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeOutputs` on an unbuffered stream
   ## or an unsafe memory stream is considered a Defect.
@@ -694,7 +696,7 @@ proc consumeContiguousOutputImpl(s: OutputStream, consumer: OutputConsumingProc)
     var span = s.buffers.consume()
     consumer(span.data())
   else:
-    var bytes = newSeqUninit[byte](s.buffers.consumable())
+    var bytes = newSeqUninit[byte](s.pos)
     var pos = 0
 
     if bytes.len > 0:
@@ -703,6 +705,8 @@ proc consumeContiguousOutputImpl(s: OutputStream, consumer: OutputConsumingProc)
         pos += span.len
 
     consumer(bytes)
+
+  s.spanEndPos = 0
 
 template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
   ## Please note that calling `consumeContiguousOutput` on an unbuffered stream
