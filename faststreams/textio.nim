@@ -2,6 +2,8 @@ import
   stew/ptrops,
   inputs, outputs, buffers, async_backend, multisync
 
+from std/strutils import Digits, Newlines
+
 when (NimMajor, NimMinor) < (2, 0):
   import system/formatfloat
 else:
@@ -123,16 +125,12 @@ proc writeHex*(s: OutputStream, bytes: openArray[byte]) =
 proc writeHex*(s: OutputStream, chars: openArray[char]) =
   writeHex s, chars.toOpenArrayByte(0, chars.high())
 
-const
-  NewLines* = {'\r', '\n'}
-  Digits* = {'0'..'9'}
-
 proc readLine*(s: InputStream, keepEol = false): string {.fsMultiSync.} =
   fsAssert readableNow(s)
 
   while s.readable:
     let c = s.peek.char
-    if c in NewLines:
+    if c in Newlines:
       if keepEol:
         result.add c
         if c == '\r' and s.readable and s.peek.char == '\n':
