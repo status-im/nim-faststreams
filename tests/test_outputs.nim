@@ -1,20 +1,35 @@
 {.used.}
 
 import
-  os, unittest2, random, strformat, sequtils, strutils, algorithm,
+  os,
+  unittest2,
+  random,
+  strformat,
+  sequtils,
+  strutils,
+  algorithm,
   stew/ptrops,
-  ../faststreams, ../faststreams/buffers, ../faststreams/textio
+  ../faststreams,
+  ../faststreams/buffers,
+  ../faststreams/textio
 
 proc bytes(s: string): seq[byte] =
   result = newSeqOfCap[byte](s.len)
-  for c in s: result.add byte(c)
+  for c in s:
+    result.add byte(c)
 
 proc bytes(s: cstring): seq[byte] =
-  for c in s: result.add byte(c)
+  for c in s:
+    result.add byte(c)
 
-template bytes(c: char): byte = byte(c)
-template bytes(b: seq[byte]): seq[byte] = b
-template bytes[N, T](b: array[N, T]): seq[byte] = @b
+template bytes(c: char): byte =
+  byte(c)
+
+template bytes(b: seq[byte]): seq[byte] =
+  b
+
+template bytes[N, T](b: array[N, T]): seq[byte] =
+  @b
 
 const line = "123456789123456789123456789123456789\n\n\n\n\n"
 
@@ -79,28 +94,28 @@ suite "output stream":
 
     streamWritingToExistingBuffer.writeText val
 
-  template checkOutputsMatch(showResults = false,
-                             skipUnbufferedFile = false) =
+  template checkOutputsMatch(showResults = false, skipUnbufferedFile = false) =
     close fileStream
     close unbufferedFileStream
 
-    check fileExists(fileOutputPath) and
-          fileExists(unbufferedFileOutputPath)
+    check fileExists(fileOutputPath) and fileExists(unbufferedFileOutputPath)
 
     let
       memStreamRes = memStream.getOutput
-      readFileRes = readFile(fileOutputPath).string.bytes
+      readFileRes = readFile(fileOutputPath).bytes
       fileInputRes = fileInput(fileOutputPath).readAllAndClose
       memFileInputRes = memFileInput(fileOutputPath).readAllAndClose
-      fileInputWithSmallPagesRes = fileInput(fileOutputPath, pageSize = 10).readAllAndClose
+      fileInputWithSmallPagesRes =
+        fileInput(fileOutputPath, pageSize = 10).readAllAndClose
 
     when showResults:
       checkpoint "Nim seq result"
       checkpoint $nimSeq
 
       checkpoint "Writes to existing buffer result"
-      checkpoint $makeOpenArray(cast[ptr byte](buffer),
-                               streamWritingToExistingBuffer.pos)
+      checkpoint $makeOpenArray(
+        cast[ptr byte](buffer), streamWritingToExistingBuffer.pos
+      )
 
       checkpoint "mem stream result"
       checkpoint $memStreamRes
@@ -118,8 +133,7 @@ suite "output stream":
       checkpoint $fileInputWithSmallPagesRes
 
     let outputsMatch =
-      nimSeq == makeOpenArray(cast[ptr byte](buffer),
-                              streamWritingToExistingBuffer.pos)
+      nimSeq == makeOpenArray(cast[ptr byte](buffer), streamWritingToExistingBuffer.pos)
     check outputsMatch
 
     check nimSeq == memStreamRes
@@ -129,7 +143,7 @@ suite "output stream":
     check nimSeq == fileInputWithSmallPagesRes
 
     when not skipUnbufferedFile:
-      let unbufferedFileRes = readFile(unbufferedFileOutputPath).string.bytes
+      let unbufferedFileRes = readFile(unbufferedFileOutputPath).bytes
       check nimSeq == unbufferedFileRes
 
   test "no appends produce an empty output":
@@ -257,13 +271,15 @@ suite "randomized tests":
       content: seq[byte]
       written: int
 
-  proc randomizedCursorsTestImpl(stream: OutputStream,
-                                 seed = 1000,
-                                 iterations = 1000,
-                                 minWriteSize = 500,
-                                 maxWriteSize = 1000,
-                                 writeTypes = Mixed,
-                                 varSizeVariance = 50): seq[byte] =
+  proc randomizedCursorsTestImpl(
+      stream: OutputStream,
+      seed = 1000,
+      iterations = 1000,
+      minWriteSize = 500,
+      maxWriteSize = 1000,
+      writeTypes = Mixed,
+      varSizeVariance = 50,
+  ): seq[byte] =
     randomize seed
 
     var delayedWrites = newSeq[DelayedWrite]()
@@ -282,7 +298,9 @@ suite "randomized tests":
             toWrite = min(rand(remaining) + 10, remaining)
 
           if delayedWrites[i].isFixedSize:
-            delayedWrites[i].fixedSizeCursor.write delayedWrites[i].content[written ..< written + toWrite]
+            delayedWrites[i].fixedSizeCursor.write delayedWrites[i].content[
+              written ..< written + toWrite
+            ]
 
           delayedWrites[i].written += toWrite
 
@@ -306,24 +324,25 @@ suite "randomized tests":
         # Normal write
         result.add randomBytes
         stream.write randomBytes
-
       else:
         # Create cursor
         result.add randomBytes
 
-        let isFixedSize = case writeTypes
-          of FixedSize: true
-          of VarSize: false
-          of Mixed: rand(10) > 3
+        let isFixedSize =
+          case writeTypes
+          of FixedSize:
+            true
+          of VarSize:
+            false
+          of Mixed:
+            rand(10) > 3
 
         if isFixedSize:
           let cursor = stream.delayFixedSizeWrite(randomBytes.len)
 
           delayedWrites.add DelayedWrite(
-            fixedSizeCursor: cursor,
-            content: randomBytes,
-            written: 0,
-            isFixedSize: true)
+            fixedSizeCursor: cursor, content: randomBytes, written: 0, isFixedSize: true
+          )
         else:
           let
             overestimatedBytes = rand(varSizeVariance)
@@ -331,10 +350,8 @@ suite "randomized tests":
             cursor = stream.delayVarSizeWrite(cursorSize)
 
           delayedWrites.add DelayedWrite(
-            varSizeCursor: cursor,
-            content: randomBytes,
-            written: 0,
-            isFixedSize: false)
+            varSizeCursor: cursor, content: randomBytes, written: 0, isFixedSize: false
+          )
 
     # Write all unwritten data to all outstanding cursors
     if stream != nil:
@@ -346,19 +363,23 @@ suite "randomized tests":
         else:
           dw.varSizeCursor.finalWrite dw.content
 
-  template randomizedCursorsTest(streamExpr: OutputStreamHandle,
-                                 writeTypesExpr: WriteTypes,
-                                 varSizeVarianceExpr: int,
-                                 customChecks: untyped = nil) =
-    const testName = "randomized cursor test [" & astToStr(streamExpr) &
-                     ";writes=" & $writeTypesExpr & ",variance=" & $varSizeVarianceExpr & "]"
+  template randomizedCursorsTest(
+      streamExpr: OutputStreamHandle,
+      writeTypesExpr: WriteTypes,
+      varSizeVarianceExpr: int,
+      customChecks: untyped = nil,
+  ) =
+    const testName =
+      "randomized cursor test [" & astToStr(streamExpr) & ";writes=" & $writeTypesExpr &
+      ",variance=" & $varSizeVarianceExpr & "]"
     test testName:
       let s = streamExpr
-      var referenceResult = randomizedCursorsTestImpl(stream = s,
-                                                      writeTypes = writeTypesExpr,
-                                                      varSizeVariance = varSizeVarianceExpr)
+      var referenceResult = randomizedCursorsTestImpl(
+        stream = s, writeTypes = writeTypesExpr, varSizeVariance = varSizeVarianceExpr
+      )
 
       when astToStr(customChecks) == "nil":
+        let pos = s.pos
         let streamResult = s.getOutput()
         let resultsMatch = streamResult == referenceResult
         when false:
@@ -369,7 +390,7 @@ suite "randomized tests":
       else:
         customChecks
 
-      check referenceResult.len == s.pos
+      check referenceResult.len == pos
 
   randomizedCursorsTest(memoryOutput(), FixedSize, 0)
   randomizedCursorsTest(memoryOutput(), VarSize, 100)
@@ -378,8 +399,7 @@ suite "randomized tests":
   test "randomized file roundtrip":
     const randomBytesFileName = "random_bytes_file"
 
-    var
-      referenceBytes, restoredBytes: seq[byte]
+    var referenceBytes, restoredBytes: seq[byte]
 
     try:
       let output = fileOutput randomBytesFileName
@@ -391,7 +411,8 @@ suite "randomized tests":
         var openArraySize = rand(12000)
         if openArraySize >= bytes.len:
           # Make sure that sometimes `writeBlock` populates the entire span
-          if i < 100: openArraySize = bytes.len
+          if i < 100:
+            openArraySize = bytes.len
           output.advance writeBlock(bytes, output.getWritableBytes(openArraySize))
         else:
           output.write bytes
@@ -420,7 +441,6 @@ suite "randomized tests":
       close input
 
       doAssert referenceBytes == restoredBytes
-
     finally:
       if fileExists(randomBytesFileName):
         removeFile randomBytesFileName
@@ -432,23 +452,23 @@ suite "randomized tests":
     var buffer = newSeq[byte](writes)
     let totalBytes = block:
       var tmp = 0
-      for i in 0..<writes:
+      for i in 0 ..< writes:
         tmp += i
         buffer[i] = byte(i)
       tmp
 
     output.ensureRunway(totalBytes)
 
-    for i in 0..<writes:
+    for i in 0 ..< writes:
       output.write(buffer.toOpenArray(0, i - 1))
 
     output.flush()
 
     let res = output.getOutput()
     var j = 0
-    for i in 0..<writes:
+    for i in 0 ..< writes:
       check:
-        res[j..<j+i] == buffer[0..<i]
+        res[j ..< j + i] == buffer[0 ..< i]
       j += i
 
   test "ensureRunway with delayFixedSizeWrite":
@@ -458,7 +478,7 @@ suite "randomized tests":
     var buffer = newSeq[byte](writes)
     let totalBytes = block:
       var tmp = 0
-      for i in 0..<writes:
+      for i in 0 ..< writes:
         tmp += i
         buffer[i] = byte(i)
       tmp
@@ -467,7 +487,7 @@ suite "randomized tests":
 
     output.ensureRunway(totalBytes)
 
-    for i in 0..<writes:
+    for i in 0 ..< writes:
       output.write(buffer.toOpenArray(0, i - 1))
 
     const data = [byte 1, 2, 3, 4, 5, 6, 7, 8]
@@ -477,13 +497,13 @@ suite "randomized tests":
 
     let res = output.getOutput()
     var j = 8
-    for i in 0..<writes:
+    for i in 0 ..< writes:
       check:
-        res[j..<j+i] == buffer[0..<i]
+        res[j ..< j + i] == buffer[0 ..< i]
       j += i
 
     check:
-      res[0..<data.len] == data
+      res[0 ..< data.len] == data
 
 suite "output api":
   test "can close default OutputStream":
@@ -505,14 +525,13 @@ suite "output api":
         test "multiple getWritableBytes " & $pageSize & " " & $advanceSize:
           var stream = memoryOutput(pageSize = pageSize)
           var expect2: typeof(expect)
-          for _ in 0..<10:
+          for _ in 0 ..< 10:
             fill(stream.getWritableBytes(10), byte 'A')
             stream.advance(advanceSize)
             expect2.add expect
 
           check:
             stream.getOutput(typeof(expect2)) == expect2
-
 
       testAdvance(repeat('A', advanceSize))
       testAdvance(repeat(byte 'A', advanceSize))
@@ -529,4 +548,123 @@ suite "output api":
     w0.finalWrite [byte 0, 1, 2, 3]
 
     check:
-       stream.getOutput(seq[byte]) == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+      stream.getOutput(seq[byte]) == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+
+  test "getOutput drains the buffer":
+    var stream = memoryOutput(pageSize = 4)
+
+    stream.write([byte 0, 1, 2, 3])
+    stream.write([byte 4, 5, 6, 7])
+    check:
+      stream.getOutput(seq[byte]) == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+      stream.getOutput(seq[byte]) == []
+
+    stream.write([byte 0])
+    check:
+      stream.getOutput(seq[byte]) == [byte 0]
+      stream.getOutput(seq[byte]) == []
+
+    for i in 0 ..< 128:
+      stream.write([byte i])
+
+    check:
+      stream.getOutput(seq[byte]).len == 128
+      stream.getOutput(seq[byte]) == []
+
+  test "consumeOutputs drains the buffer":
+    var stream = memoryOutput(pageSize = 4)
+
+    stream.write([byte 0, 1, 2, 3])
+    stream.write([byte 4, 5, 6, 7])
+
+    var tmp: seq[byte]
+    stream.consumeOutputs(bytes):
+      tmp.add bytes
+
+    check:
+      tmp == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+    reset(tmp)
+
+    stream.consumeOutputs(bytes):
+      tmp.add bytes
+
+    check:
+      tmp == []
+
+    stream.write([byte 0])
+    stream.consumeContiguousOutput(bytes):
+      tmp.add bytes
+
+    check:
+      tmp == [byte 0]
+    reset(tmp)
+
+    stream.consumeContiguousOutput(bytes):
+      tmp.add bytes
+
+    check:
+      tmp == []
+
+    for i in 0 ..< 128:
+      stream.write([byte i])
+
+    stream.consumeContiguousOutput(bytes):
+      tmp.add bytes
+
+    check:
+      tmp.len == 128
+    reset(tmp)
+
+    stream.consumeContiguousOutput(bytes):
+      tmp.add bytes
+
+    check:
+      tmp == []
+
+  test "consumeContiguousOutput drains the buffer":
+    var stream = memoryOutput(pageSize = 4)
+
+    stream.write([byte 0, 1, 2, 3])
+    stream.write([byte 4, 5, 6, 7])
+
+    var tmp: seq[byte]
+    stream.consumeContiguousOutput(bytes):
+      tmp = @bytes
+
+    check:
+      tmp == [byte 0, 1, 2, 3, 4, 5, 6, 7]
+
+    stream.consumeContiguousOutput(bytes):
+      tmp = @bytes
+
+    check:
+      tmp == []
+
+    stream.write([byte 0])
+    stream.consumeContiguousOutput(bytes):
+      tmp = @bytes
+
+    check:
+      tmp == [byte 0]
+
+    stream.consumeContiguousOutput(bytes):
+      tmp = @bytes
+
+    check:
+      tmp == []
+
+
+    for i in 0 ..< 128:
+      stream.write([byte i])
+
+    stream.consumeContiguousOutput(bytes):
+      tmp = @bytes
+
+    check:
+      tmp.len == 128
+
+    stream.consumeContiguousOutput(bytes):
+      tmp = @bytes
+
+    check:
+      tmp == []

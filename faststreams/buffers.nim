@@ -47,7 +47,7 @@ type
       ## Number of bytes reserved for future writing
     store*: ref seq[byte]
       ## Memory backing the page - allocated once and never resized to maintain
-      ## pointer stability. Multiple pages may share the same buffer, which
+      ## pointer stability. Multiple pages may share the same store, which
       ## specially happens when reserving parts of a page for delayed writing.
 
   PageRef* = ref Page
@@ -130,24 +130,22 @@ func nextAlignedSize*(minSize, pageSize: Natural): Natural =
   else:
     max(((minSize + pageSize - 1) div pageSize) * pageSize, pageSize)
 
-# BEWARE! These templates violate the double evaluation
-#         safety measures in order to produce better inlined
-#         code. We are using a `var` type to make it harder
-#         to accidentally misuse them.
-template len*(span: var PageSpan): Natural =
+func len*(span: PageSpan): Natural {.inline.} =
   distance(span.startAddr, span.endAddr)
 
 func `$`*(span: PageSpan): string =
   # avoid repr(ptr byte) since it can crash if the pointee is gone
-  var span = span
   "[startAddr: " & repr(pointer(span.startAddr)) & ", len: " & $span.len & "]"
 
-template atEnd*(span: var PageSpan): bool =
+func atEnd*(span: PageSpan): bool {.inline.} =
   span.startAddr == span.endAddr
 
 template hasRunway*(span: var PageSpan): bool =
   not span.atEnd()
 
+# BEWARE! These templates violate the double evaluation
+#         safety measures in order to produce better inlined
+#         code - `var` helps prevent misuse
 template advance*(span: var PageSpan, numberOfBytes: Natural = 1) =
   span.startAddr = offset(span.startAddr, numberOfBytes)
 
@@ -237,6 +235,7 @@ func prepare*(page: PageRef): PageSpan =
   ##
   ## After writing data to the span, `commit` should be called with the number
   ## of bytes written (or the advanced span).
+  fsAssert not page.reserved
   let baseAddr = allocationStart(page)
   PageSpan(
     startAddr: offset(baseAddr, page.writtenTo),
@@ -251,7 +250,9 @@ func prepare*(page: PageRef, len: Natural): PageSpan =
   ## of bytes written (or the advanced span).
   ##
   ## `len` must not be greater than `page.capacity()`.
+  fsAssert not page.reserved
   fsAssert len <= page.capacity()
+
   let
     baseAddr = allocationStart(page)
     startAddr = offset(baseAddr, page.writtenTo)
@@ -259,16 +260,15 @@ func prepare*(page: PageRef, len: Natural): PageSpan =
   PageSpan(startAddr: startAddr, endAddr: endAddr)
 
 func contains*(page: PageRef, address: ptr byte): bool {.inline.} =
-  let span = page.prepare()
-  address >= span.startAddr and address <= span.endAddr
+  address >= page.writableStart() and address <= page.allocationEnd()
 
-func commit*(page: PageRef) =
+func commit*(page: PageRef) {.inline.} =
   ## Mark the span returned by `prepare` as committed, allowing it to be
   ## accessed by `consume`
   page.reservedTo = 0
   page.writtenTo = page.store[].len()
 
-func commit*(page: PageRef, len: Natural) =
+func commit*(page: PageRef, len: Natural) {.inline.} =
   ## Mark `len` prepared bytes as committed, allowing them to be accessed by
   ## `consume`. `len` may be fewer bytes than were returned by `prepare`.
   fsAssert len <= page.capacity()
@@ -457,6 +457,18 @@ func consume*(buffers: PageBuffers, maxLen = int.high()): PageSpan =
 
   PageSpan() # No ready pages
 
+iterator consumeAll*(buffers: PageBuffers): PageSpan =
+  ## Iterate over all spans consuming them in the process. If the iteration is
+  ## interrupted (for example by a `break` or exception), the last visited span
+  ## will still be treated as consumed - use `unconsume` to undo.
+  var span: PageSpan
+  while true:
+    span = buffers.consume()
+    if span.atEnd:
+      break
+
+    yield span
+
 func unconsume*(buffers: PageBuffers, bytes: Natural) =
   ## Return bytes that were given by the previous call to `consume`
   fsAssert buffers.queue.len > 0
@@ -618,7 +630,7 @@ func splitLastPageAt*(buffers: PageBuffers, address: ptr byte) {.deprecated: "re
   topPage.writtenTo = splitPosition
   buffers.queue.addLast newPage
 
-iterator consumePages*(buffers: PageBuffers): PageRef =
+iterator consumePages*(buffers: PageBuffers): PageRef {.deprecated: "consumeAll".} =
   fsAssert buffers != nil
 
   while buffers.queue.len > 0:
@@ -639,7 +651,7 @@ iterator consumePages*(buffers: PageBuffers): PageRef =
 
     discard buffers.queue.popFirst
 
-iterator consumePageBuffers*(buffers: PageBuffers): (ptr byte, Natural) =
+iterator consumePageBuffers*(buffers: PageBuffers): (ptr byte, Natural) {.deprecated: "consumeAll".} =
   for page in consumePages(buffers):
     yield (page.readableStart, page.len())
 
