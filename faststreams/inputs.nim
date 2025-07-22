@@ -105,7 +105,11 @@ when fsAsyncSupport:
 
 func preventFurtherReading(s: InputStream) =
   s.vtable = nil
-  fsAssert s.span.startAddr <= s.span.endAddr, "Buffer overrun in previous read!"
+  when nimvm:
+    discard
+  else:
+    # TODO https://github.com/nim-lang/Nim/issues/25066
+    fsAssert s.span.startAddr <= s.span.endAddr, "Buffer overrun in previous read!"
   s.span.endAddr = s.span.startAddr
 
 when fsAsyncSupport:
