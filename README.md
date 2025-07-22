@@ -7,23 +7,17 @@
 
 FastStreams is a highly efficient library for all your I/O needs.
 
-It offers nearly zero-overhead synchronous and asynchronous streams
-for handling inputs and outputs of various types:
+It offers nearly zero-overhead synchronous streams for handling inputs and
+outputs of various types:
 
 * Memory inputs and outputs for serialization frameworks and parsers
 * File inputs and outputs
-* Pipes and Process I/O
-* Networking
 
 The library aims to provide a common interface between all stream types
-that allows the application code to be easily portable to different back-end
-event loops. In particular, [Chronos](https://github.com/status-im/nim-chronos)
-and [AsyncDispatch](https://nim-lang.org/docs/asyncdispatch.html)
-are already supported. It's envisioned that the library will also
-gain support for the Nginx event loop to allow the creation of web
-applications running as Nginx run-time modules and the [SeaStar event loop](http://seastar.io/)
-for the development of extremely low-latency services taking advantage
-of [kernel-bypass networking](https://blog.cloudflare.com/kernel-bypass/).
+that allows the application code to be easily portable to different back-ends.
+
+The library contains prototype-level support for `{.async.}` streams - this
+support should be considered experimental and may change in future releases.
 
 ## What does zero-overhead mean?
 
@@ -81,7 +75,7 @@ A major difference in the FastStreams design is that the arbitrary-length
 data obtained from the input device is managed by the stream itself while you
 are provided with an API allowing you to control precisely how much data
 is consumed from the stream. Consuming the buffered content does not invoke
-costly asynchronous calls and you are allowed to peek at the stream contents
+costly calls and you are allowed to peek at the stream contents
 before deciding which step to take next (something crucial for handling formal
 grammars). Thus, using the FastStreams API results in code that is both highly
 efficient and easy to author.
