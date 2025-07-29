@@ -453,6 +453,14 @@ proc fileInput*(filename: string,
   return fileInput(file, offset, pageSize)
 
 func unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
+  ## Unsafe memory input that relies on `mem` to remain available for the
+  ## duration of the usage of the input stream.
+  ##
+  ## One particular high-risk scenario is when using `--mm:refc` - when `mem`
+  ## refers to a local garbage-collected type like `seq`, the GC might claim
+  ## the instance even though scope-wise, it looks like it should stay alive.
+  ##
+  ## See also https://github.com/nim-lang/Nim/issues/25080
   let head = cast[ptr byte](mem)
 
   makeHandle InputStream(
