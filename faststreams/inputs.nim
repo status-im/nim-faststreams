@@ -469,7 +469,7 @@ func unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
       endAddr: offset(head, mem.len)),
     spanEndPos: mem.len)
 
-func unsafeMemoryInput*(str: string): InputStreamHandle =
+func unsafeMemoryInput*(str: openArray[char]): InputStreamHandle =
   unsafeMemoryInput str.toOpenArrayByte(0, str.len - 1)
 
 proc len*(s: InputStream): Option[Natural] {.raises: [IOError].} =
@@ -487,19 +487,30 @@ when fsAsyncSupport:
 func memoryInput*(buffers: PageBuffers): InputStreamHandle =
   makeHandle InputStream(buffers: buffers)
 
-func memoryInput*(data: openArray[byte]): InputStreamHandle =
-  let stream = if data.len > 0:
-    let buffers = PageBuffers.init(data.len)
-    buffers.write(data)
+func memoryInput*(data: sink seq[byte]): InputStreamHandle =
+  let len = data.len
+  let stream =
+    if len > 0:
+      let store = new seq[byte]
+      store[] = move(data)
 
-    InputStream(buffers: buffers)
-  else:
-    InputStream()
+      let page = PageRef.init(store, 0)
+      page.commit(len)
+
+      let buffers = PageBuffers.init(len)
+      buffers.queue.addLast page
+
+      InputStream(buffers: buffers)
+    else:
+      InputStream()
 
   makeHandle stream
 
+func memoryInput*(data: openArray[byte]): InputStreamHandle =
+  memoryInput(@data)
+
 func memoryInput*(data: openArray[char]): InputStreamHandle =
-  memoryInput data.toOpenArrayByte(0, data.high())
+  memoryInput(@data.toOpenArrayByte(0, data.high()))
 
 func resetBuffers*(s: InputStream, buffers: PageBuffers) =
   # This should be used only on safe memory input streams
