@@ -488,21 +488,22 @@ func memoryInput*(buffers: PageBuffers): InputStreamHandle =
   makeHandle InputStream(buffers: buffers)
 
 func memoryInput*(data: sink seq[byte]): InputStreamHandle =
-  let len = data.len
-  let stream =
-    if len > 0:
-      let store = new seq[byte]
-      store[] = move(data)
+  let
+    len = data.len
+    stream =
+      if len > 0:
+        let store = new seq[byte]
+        store[] = move(data)
 
-      let page = PageRef.init(store, 0)
-      page.commit(len)
+        let page = PageRef.init(store, 0)
+        page.commit(len)
 
-      let buffers = PageBuffers.init(len)
-      buffers.queue.addLast page
+        let buffers = PageBuffers.init(len)
+        buffers.queue.addLast page
 
-      InputStream(buffers: buffers)
-    else:
-      InputStream()
+        InputStream(buffers: buffers)
+      else:
+        InputStream()
 
   makeHandle stream
 
