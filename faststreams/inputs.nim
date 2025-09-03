@@ -77,6 +77,10 @@ type
   FileInputStream = ref object of InputStream
     file: File
 
+  VmInputStream = ref object of InputStream
+    data: seq[byte]
+    pos: int
+
 template Sync*(s: InputStream): InputStream = s
 
 when fsAsyncSupport:
@@ -461,13 +465,16 @@ func unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
   ## the instance even though scope-wise, it looks like it should stay alive.
   ##
   ## See also https://github.com/nim-lang/Nim/issues/25080
-  let head = cast[ptr byte](mem)
+  when nimvm:
+    makeHandle VmInputStream(data: @mem, pos: 0)
+  else:
+    let head = cast[ptr byte](mem)
 
-  makeHandle InputStream(
-    span: PageSpan(
-      startAddr: head,
-      endAddr: offset(head, mem.len)),
-    spanEndPos: mem.len)
+    makeHandle InputStream(
+      span: PageSpan(
+        startAddr: head,
+        endAddr: offset(head, mem.len)),
+      spanEndPos: mem.len)
 
 func unsafeMemoryInput*(str: string): InputStreamHandle =
   unsafeMemoryInput str.toOpenArrayByte(0, str.len - 1)
@@ -488,15 +495,18 @@ func memoryInput*(buffers: PageBuffers): InputStreamHandle =
   makeHandle InputStream(buffers: buffers)
 
 func memoryInput*(data: openArray[byte]): InputStreamHandle =
-  let stream = if data.len > 0:
-    let buffers = PageBuffers.init(data.len)
-    buffers.write(data)
-
-    InputStream(buffers: buffers)
+  when nimvm:
+    makeHandle VmInputStream(data: @data, pos: 0)
   else:
-    InputStream()
+    let stream = if data.len > 0:
+      let buffers = PageBuffers.init(data.len)
+      buffers.write(data)
 
-  makeHandle stream
+      InputStream(buffers: buffers)
+    else:
+      InputStream()
+
+    makeHandle stream
 
 func memoryInput*(data: openArray[char]): InputStreamHandle =
   memoryInput data.toOpenArrayByte(0, data.high())
@@ -558,6 +568,9 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
+template readable(s: VmInputStream): bool =
+  s.pos < s.data.len
+
 template readable*(sp: InputStream): bool =
   ## Checks whether reading more data from the stream is possible.
   ##
@@ -598,8 +611,11 @@ template readable*(sp: InputStream): bool =
   # This is a template, because we want the pointer check to be
   # inlined at the call sites. Only if it fails, we call into the
   # larger non-inlined proc:
-  let s = sp
-  hasRunway(s.span) or bufferMoreDataSync(s)
+  when nimvm:
+    readable(VmInputStream(sp))
+  else:
+    let s = sp
+    hasRunway(s.span) or bufferMoreDataSync(s)
 
 when fsAsyncSupport:
   template readable*(sp: AsyncInputStream): bool =
@@ -691,13 +707,20 @@ when fsAsyncSupport:
 
     readableNImpl(s, n, fsAwait, readAsync)
 
+template peek(s: VmInputStream): byte =
+  doAssert s.pos < s.data.len
+  s.data[s.pos]
+
 template peek*(sp: InputStream): byte =
-  let s = sp
-  if hasRunway(s.span):
-    s.span.startAddr[]
+  when nimvm:
+    peek(VmInputStream(sp))
   else:
-    getNewSpanOrDieTrying s
-    s.span.startAddr[]
+    let s = sp
+    if hasRunway(s.span):
+      s.span.startAddr[]
+    else:
+      getNewSpanOrDieTrying s
+      s.span.startAddr[]
 
 when fsAsyncSupport:
   template peek*(s: AsyncInputStream): byte =
@@ -707,12 +730,20 @@ func readFromNewSpan(s: InputStream): byte =
   getNewSpanOrDieTrying s
   s.span.read()
 
+template read(s: VmInputStream): byte =
+  doAssert s.pos < s.data.len
+  inc s.pos
+  s.data[s.pos-1]
+
 template read*(sp: InputStream): byte =
-  let s = sp
-  if hasRunway(s.span):
-    s.span.read()
+  when nimvm:
+    read(VmInputStream(sp))
   else:
-    readFromNewSpan s
+    let s = sp
+    if hasRunway(s.span):
+      s.span.read()
+    else:
+      readFromNewSpan s
 
 when fsAsyncSupport:
   template read*(s: AsyncInputStream): byte =
@@ -738,11 +769,18 @@ when fsAsyncSupport:
   template peekAt*(s: AsyncInputStream, pos: int): byte =
     peekAt InputStream(s), pos
 
-func advance*(s: InputStream) =
-  if s.span.atEnd:
-    getNewSpanOrDieTrying s
+func advance(s: VmInputStream) =
+  doAssert s.pos < s.data.len
+  inc s.pos
 
-  s.span.advance()
+func advance*(s: InputStream) =
+  when nimvm:
+    advance(VmInputStream(s))
+  else:
+    if s.span.atEnd:
+      getNewSpanOrDieTrying s
+
+    s.span.advance()
 
 func advance*(s: InputStream, n: Natural) =
   # TODO This is silly, implement it properly
