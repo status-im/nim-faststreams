@@ -270,9 +270,12 @@ func getNewSpanOrDieTrying(s: InputStream) =
   fsAssert s.span.hasRunway
 
 func readableNow*(s: InputStream): bool =
-  if s.span.hasRunway: return true
-  getNewSpan s
-  s.span.hasRunway
+  when nimvm:
+    true
+  else:
+    if s.span.hasRunway: return true
+    getNewSpan s
+    s.span.hasRunway
 
 when fsAsyncSupport:
   template readableNow*(s: AsyncInputStream): bool =
@@ -479,13 +482,20 @@ func unsafeMemoryInput*(mem: openArray[byte]): InputStreamHandle =
 func unsafeMemoryInput*(str: string): InputStreamHandle =
   unsafeMemoryInput str.toOpenArrayByte(0, str.len - 1)
 
+proc len(s: VmInputStream): Option[Natural] =
+  doAssert s.data.len - s.pos >= 0
+  some(Natural(s.data.len - s.pos))
+
 proc len*(s: InputStream): Option[Natural] {.raises: [IOError].} =
-  if s.vtable == nil:
-    some s.totalUnconsumedBytes
-  elif s.vtable.getLenSync != nil:
-    s.vtable.getLenSync(s)
+  when nimvm:
+    len(VmInputStream(s))
   else:
-    none Natural
+    if s.vtable == nil:
+      some s.totalUnconsumedBytes
+    elif s.vtable.getLenSync != nil:
+      s.vtable.getLenSync(s)
+    else:
+      none Natural
 
 when fsAsyncSupport:
   template len*(s: AsyncInputStream): Option[Natural] =
@@ -568,9 +578,6 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
-template readable(s: VmInputStream): bool =
-  s.pos < s.data.len
-
 template readable*(sp: InputStream): bool =
   ## Checks whether reading more data from the stream is possible.
   ##
@@ -612,7 +619,7 @@ template readable*(sp: InputStream): bool =
   # inlined at the call sites. Only if it fails, we call into the
   # larger non-inlined proc:
   when nimvm:
-    readable(VmInputStream(sp))
+    VmInputStream(sp).pos < VmInputStream(sp).data.len
   else:
     let s = sp
     hasRunway(s.span) or bufferMoreDataSync(s)
@@ -694,7 +701,10 @@ proc readable*(s: InputStream, n: int): bool =
   ## Just like `readable`, this operation will invoke reads on the
   ## stream input device only when necessary. See `Stream Pages`
   ## for futher discussion of this.
-  readableNImpl(s, n, noAwait, readSync)
+  when nimvm:
+    VmInputStream(s).pos + n < VmInputStream(s).data.len
+  else:
+    readableNImpl(s, n, noAwait, readSync)
 
 when fsAsyncSupport:
   template readable*(sp: AsyncInputStream, np: int): bool =
@@ -851,6 +861,15 @@ template readIntoExImpl(s: InputStream,
 
   dstLen - bytesDeficit
 
+proc readIntoEx(s: VmInputStream, dst: var openArray[byte]): int =
+  result = 0
+  for i in 0 ..< dst.len:
+    if s.pos >= s.data.len:
+      break
+    dst[i] = s.data[s.pos]
+    inc s.pos
+    inc result
+
 proc readIntoEx*(s: InputStream, dst: var openArray[byte]): int =
   ## Read data into the destination buffer.
   ##
@@ -858,12 +877,15 @@ proc readIntoEx*(s: InputStream, dst: var openArray[byte]): int =
   ## written to the buffer. The function will return a
   ## number smaller than the buffer length only if EOF
   ## was reached before the buffer was fully populated.
-  if dst.len > 0:
-    let dstAddr = baseAddr dst
-    let dstLen = dst.len
-    readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
+  when nimvm:
+    readIntoEx(VmInputStream(s), dst)
   else:
-    0
+    if dst.len > 0:
+      let dstAddr = baseAddr dst
+      let dstLen = dst.len
+      readIntoExImpl(s, dstAddr, dstLen, noAwait, readSync)
+    else:
+      0
 
 proc readInto*(s: InputStream, target: var openArray[byte]): bool =
   ## Read data into the destination buffer.
@@ -938,15 +960,25 @@ template readNImpl(sp: InputStream,
 
   makeOpenArray(startAddr, n)
 
+template read(s: VmInputStream, n: Natural): openArray[byte] =
+  doAssert s.pos + n - 1 <= s.data.len, "not enough data to read"
+  toOpenArray(s.data, s.pos, s.pos + n - 1)
+
 template read*(sp: InputStream, np: static Natural): openArray[byte] =
-  const n = np
-  when n < maxStackUsage:
-    readNImpl(sp, n, MemAllocType.StackMem)
+  when nimvm:
+    read(VmInputStream(sp), np)
   else:
-    readNImpl(sp, n, MemAllocType.HeapMem)
+    const n = np
+    when n < maxStackUsage:
+      readNImpl(sp, n, MemAllocType.StackMem)
+    else:
+      readNImpl(sp, n, MemAllocType.HeapMem)
 
 template read*(s: InputStream, n: Natural): openArray[byte] =
-  readNImpl(s, n, MemAllocType.HeapMem)
+  when nimvm:
+    read(VmInputStream(s), n)
+  else:
+    readNImpl(s, n, MemAllocType.HeapMem)
 
 when fsAsyncSupport:
   template read*(s: AsyncInputStream, n: Natural): openArray[byte] =
