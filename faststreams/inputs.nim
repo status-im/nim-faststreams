@@ -976,7 +976,10 @@ when fsAsyncSupport:
       none byte
 
 func pos*(s: InputStream): int {.inline.} =
-  s.spanEndPos - s.span.len
+  when nimvm:
+    VmInputStream(s).pos
+  else:
+    s.spanEndPos - s.span.len
 
 when fsAsyncSupport:
   template pos*(s: AsyncInputStream): int =
