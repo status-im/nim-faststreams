@@ -271,7 +271,7 @@ func getNewSpanOrDieTrying(s: InputStream) =
 
 func readableNow*(s: InputStream): bool =
   when nimvm:
-    true
+    VmInputStream(s).pos < VmInputStream(s).data.len
   else:
     if s.span.hasRunway: return true
     getNewSpan s
@@ -330,20 +330,26 @@ func getBestContiguousRunway(s: InputStream): Natural =
     getNewSpan s
     result = s.span.len
 
+func totalUnconsumedBytes(s: VmInputStream): Natural =
+  s.data.len - s.pos
+
 func totalUnconsumedBytes*(s: InputStream): Natural =
   ## Returns the number of bytes that are currently sitting within the stream
   ## buffers and that can be consumed with `read` or `advance`.
-  let
-    localRunway = s.span.len
-    runwayInBuffers =
-      if s.maxBufferedBytes.isSome():
-        s.maxBufferedBytes.get()
-      elif s.buffers != nil:
-        s.buffers.consumable()
-      else:
-        0
+  when nimvm:
+    totalUnconsumedBytes(VmInputStream(s))
+  else:
+    let
+      localRunway = s.span.len
+      runwayInBuffers =
+        if s.maxBufferedBytes.isSome():
+          s.maxBufferedBytes.get()
+        elif s.buffers != nil:
+          s.buffers.consumable()
+        else:
+          0
 
-  localRunway + runwayInBuffers
+    localRunway + runwayInBuffers
 
 proc prepareReadableRange(s: InputStream, rangeLen: Natural): auto =
   let
@@ -702,7 +708,7 @@ proc readable*(s: InputStream, n: int): bool =
   ## stream input device only when necessary. See `Stream Pages`
   ## for futher discussion of this.
   when nimvm:
-    VmInputStream(s).pos + n < VmInputStream(s).data.len
+    VmInputStream(s).pos + n <= VmInputStream(s).data.len
   else:
     readableNImpl(s, n, noAwait, readSync)
 
@@ -759,21 +765,28 @@ when fsAsyncSupport:
   template read*(s: AsyncInputStream): byte =
     read InputStream(s)
 
+func peekAt(s: VmInputStream, pos: int): byte =
+  doAssert s.pos + pos < s.data.len
+  s.data[s.pos + pos]
+
 func peekAt*(s: InputStream, pos: int): byte {.inline.} =
-  let runway = s.span.len
-  if pos < runway:
-    let peekHead = offset(s.span.startAddr, pos)
-    return peekHead[]
+  when nimvm:
+    return peekAt(VmInputStream(s), pos)
+  else:
+    let runway = s.span.len
+    if pos < runway:
+      let peekHead = offset(s.span.startAddr, pos)
+      return peekHead[]
 
-  if s.buffers != nil:
-    var p = pos - runway
-    for page in s.buffers.queue:
-      if p < page.len():
-        return page.data()[p]
-      p -= page.len()
+    if s.buffers != nil:
+      var p = pos - runway
+      for page in s.buffers.queue:
+        if p < page.len():
+          return page.data()[p]
+        p -= page.len()
 
-  fsAssert false,
-    "peeking past readable position pos=" & $pos & " readable = " & $s.totalUnconsumedBytes()
+    fsAssert false,
+      "peeking past readable position pos=" & $pos & " readable = " & $s.totalUnconsumedBytes()
 
 when fsAsyncSupport:
   template peekAt*(s: AsyncInputStream, pos: int): byte =
