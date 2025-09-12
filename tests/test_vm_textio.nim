@@ -1,3 +1,5 @@
+{.used.}
+
 import unittest2, ../faststreams, ../faststreams/textio
 
 proc readAll(s: InputStream): string =

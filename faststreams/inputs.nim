@@ -123,6 +123,11 @@ when fsAsyncSupport:
 template makeHandle*(sp: InputStream): InputStreamHandle =
   InputStreamHandle(s: sp)
 
+proc close(s: VmInputStream) =
+  if s == nil:
+    return
+  s.pos = s.data.len
+
 proc close*(s: InputStream,
             behavior = dontWaitAsyncClose)
            {.raises: [IOError].} =
@@ -132,18 +137,21 @@ proc close*(s: InputStream,
   ## If the underlying input device requires asynchronous closing
   ## and `behavior` is set to `waitAsyncClose`, this proc will use
   ## `waitFor` to block until the async operation completes.
-  if s == nil:
-    return
+  when nimvm:
+    close(VmInputStream(s))
+  else:
+    if s == nil:
+      return
 
-  s.disconnectInputDevice()
-  s.preventFurtherReading()
-  when fsAsyncSupport:
-    if s.closeFut != nil:
-      fsTranslateErrors "Stream closing failed":
-        if behavior == waitAsyncClose:
-          waitFor s.closeFut
-        else:
-          asyncCheck s.closeFut
+    s.disconnectInputDevice()
+    s.preventFurtherReading()
+    when fsAsyncSupport:
+      if s.closeFut != nil:
+        fsTranslateErrors "Stream closing failed":
+          if behavior == waitAsyncClose:
+            waitFor s.closeFut
+          else:
+            asyncCheck s.closeFut
 
 when fsAsyncSupport:
   template close*(sp: AsyncInputStream) =

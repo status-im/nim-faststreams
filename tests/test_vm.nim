@@ -1,3 +1,5 @@
+{.used.}
+
 import unittest2, ../faststreams
 
 proc readAll(s: InputStream): string =
@@ -98,6 +100,12 @@ suite "Inputs":
     for i in 0 ..< text.len:
       check s.pos() == i
       discard s.read()
+
+  dualTest "close":
+    let s = memoryInput("abc")
+    check readable(s)
+    s.close()
+    check(not readable(s))
 
   dualTest "unsafe read":
     let text = "abc"
