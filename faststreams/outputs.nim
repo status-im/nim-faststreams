@@ -93,6 +93,9 @@ type
     file: File
     allowAsyncOps: bool
 
+  VmOutputStream = ref object of OutputStream
+    data: seq[byte]
+
 template Sync*(s: OutputStream): OutputStream = s
 
 when fsAsyncSupport:
@@ -194,10 +197,13 @@ template makeHandle*(sp: OutputStream): OutputStreamHandle =
   OutputStreamHandle(s: s)
 
 proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
-  fsAssert pageSize > 0
-  # We are not creating an initial output page, because `ensureRunway`
-  # can determine the most appropriate size.
-  makeHandle OutputStream(buffers: PageBuffers.init(pageSize))
+  when nimvm:
+    makeHandle VmOutputStream(data: @[])
+  else:
+    fsAssert pageSize > 0
+    # We are not creating an initial output page, because `ensureRunway`
+    # can determine the most appropriate size.
+    makeHandle OutputStream(buffers: PageBuffers.init(pageSize))
 
 proc unsafeMemoryOutput*(buffer: pointer, len: Natural): OutputStreamHandle =
   let buffer = cast[ptr byte](buffer)
@@ -479,11 +485,14 @@ proc writeToNewSpan(s: OutputStream, b: byte) =
   writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
 
 template write*(sp: OutputStream, b: byte) =
-  let s = sp
-  if hasRunway(s.span):
-    write(s.span, b)
+  when nimvm:
+    VmOutputStream(sp).data.add(b)
   else:
-    writeToNewSpan(s, b)
+    let s = sp
+    if hasRunway(s.span):
+      write(s.span, b)
+    else:
+      writeToNewSpan(s, b)
 
 when fsAsyncSupport:
   proc write*(sp: AsyncOutputStream, b: byte) =
@@ -543,8 +552,11 @@ template writeBytesImpl(s: OutputStream,
     drainOp
 
 proc write*(s: OutputStream, bytes: openArray[byte]) =
-  writeBytesImpl(s, bytes):
-    drainAllBuffersSync(s, baseAddr(bytes), bytes.len)
+  when nimvm:
+    VmOutputStream(s).data.add(bytes)
+  else:
+    writeBytesImpl(s, bytes):
+      drainAllBuffersSync(s, baseAddr(bytes), bytes.len)
 
 proc write*(s: OutputStream, chars: openArray[char]) =
   write s, chars.toOpenArrayByte(0, chars.high())
@@ -720,6 +732,12 @@ template consumeContiguousOutput*(s: OutputStream, bytesVar, body: untyped) =
 
   consumeContiguousOutputImpl(s, consumer)
 
+template toVMString(x: openArray[byte]): string =
+  var z = newString(x.len)
+  for i, c in x:
+    z[i] = char(c)
+  z
+
 proc getOutput*(s: OutputStream, T: type string): string =
   ## Consume data written so far to the in-memory page buffer - this operation
   ## is meaningful only for `memoryOutput` and leaves the page buffer empty.
@@ -729,18 +747,21 @@ proc getOutput*(s: OutputStream, T: type string): string =
   ##
   ## Before consuming the output, all outstanding delayed writes must be finalized.
   ##
-  fsAssert s.extCursorsCount == 0 and s.buffers != nil
-  s.commitSpan(s.span)
+  when nimvm:
+    return toVMString(VmOutputStream(s).data)
+  else:
+    fsAssert s.extCursorsCount == 0 and s.buffers != nil
+    s.commitSpan(s.span)
 
-  result = newStringOfCap(s.pos)
-  s.spanEndPos = 0
+    result = newStringOfCap(s.pos)
+    s.spanEndPos = 0
 
-  for span in s.buffers.consumeAll():
-    when compiles(span.data().toOpenArrayChar(0, len - 1)):
-      result.add span.data().toOpenArrayChar(0, len - 1)
-    else:
-      let p = cast[ptr char](span.startAddr)
-      result.add makeOpenArray(p, span.len)
+    for span in s.buffers.consumeAll():
+      when compiles(span.data().toOpenArrayChar(0, len - 1)):
+        result.add span.data().toOpenArrayChar(0, len - 1)
+      else:
+        let p = cast[ptr char](span.startAddr)
+        result.add makeOpenArray(p, span.len)
 
 proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   ## Consume data written so far to the in-memory page buffer - this operation
@@ -750,28 +771,31 @@ proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   ## or an unsafe memory stream is considered a Defect.
   ##
   ## Before consuming the output, all outstanding delayed writes must be finalized.
-  fsAssert s.extCursorsCount == 0 and s.buffers != nil
-  s.commitSpan(s.span)
+  when nimvm:
+    return VmOutputStream(s).data
+  else:
+    fsAssert s.extCursorsCount == 0 and s.buffers != nil
+    s.commitSpan(s.span)
 
-  if s.buffers.queue.len == 1:
-    let page = s.buffers.queue[0]
-    if page.consumedTo == 0:
-      # "move" the buffer to the caller - swap works for all nim versions and gcs
-      result.swap page.store[]
-      result.setLen page.writtenTo
-      # We clear the buffers, so the stream will be in pristine state.
-      # The next write is going to create a fresh new starting page.
-      s.buffers.queue.clear()
-      s.spanEndPos = 0
-      return
+    if s.buffers.queue.len == 1:
+      let page = s.buffers.queue[0]
+      if page.consumedTo == 0:
+        # "move" the buffer to the caller - swap works for all nim versions and gcs
+        result.swap page.store[]
+        result.setLen page.writtenTo
+        # We clear the buffers, so the stream will be in pristine state.
+        # The next write is going to create a fresh new starting page.
+        s.buffers.queue.clear()
+        s.spanEndPos = 0
+        return
 
-  result = newSeqUninit[byte](s.pos)
-  s.spanEndPos = 0
+    result = newSeqUninit[byte](s.pos)
+    s.spanEndPos = 0
 
-  var pos = 0
-  for span in s.buffers.consumeAll():
-    copyMem(addr result[pos], span.startAddr, span.len)
-    pos += span.len
+    var pos = 0
+    for span in s.buffers.consumeAll():
+      copyMem(addr result[pos], span.startAddr, span.len)
+      pos += span.len
 
 template getOutput*(s: OutputStream): seq[byte] =
   s.getOutput(seq[byte])

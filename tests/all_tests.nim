@@ -3,5 +3,7 @@ import
   test_inputs,
   test_outputs,
   test_pipelines,
-  test_readme_examples
-
+  test_readme_examples,
+  test_vm_readme,
+  test_vm_textio,
+  test_vm

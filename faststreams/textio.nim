@@ -95,25 +95,16 @@ proc writeText*(s: OutputStream, x: CompiledIntTypes) =
   else:
     writeText(s, MatchingUInt(x))
 
-when defined(c):
-
-  proc writeText*(s: OutputStream, x: float64|float32|float) =
-    ## Write the floating point number to the output stream. It has less overhead
-    ## than `$` because it is directly written to the stream without
-    ## allocating a standard Nim 'string'.
-    ##
-    ## Because this procedure uses stdlib, it is only active when Nim compiles
-    ## with the 'c' flag. Otherwise, float types are passed to the generic writeText
-    ## procedure.
-    var buffer: array[65, char]
-    let blen = writeFloatToBuffer(buffer, x)
-    write s, buffer.toOpenArray(0, blen - 1)
-
 template writeText*(s: OutputStream, str: string) =
   write s, str
 
 template writeText*(s: OutputStream, val: auto) =
-  write s, $val
+  when val is SomeFloat:
+    var buffer: array[65, char]
+    let blen = writeFloatToBufferRoundtrip(buffer, val)
+    write s, buffer.toOpenArray(0, blen - 1)
+  else:
+    write s, $val
 
 proc writeHex*(s: OutputStream, bytes: openArray[byte]) =
   const hexChars = "0123456789abcdef"
