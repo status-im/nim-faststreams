@@ -98,13 +98,13 @@ proc writeText*(s: OutputStream, x: CompiledIntTypes) =
 template writeText*(s: OutputStream, str: string) =
   write s, str
 
+proc writeText*(s: OutputStream, x: SomeFloat) =
+  var buffer: array[65, char]
+  let blen = writeFloatToBufferRoundtrip(buffer, x)
+  write s, buffer.toOpenArray(0, blen - 1)
+
 template writeText*(s: OutputStream, val: auto) =
-  when val is SomeFloat:
-    var buffer: array[65, char]
-    let blen = writeFloatToBufferRoundtrip(buffer, val)
-    write s, buffer.toOpenArray(0, blen - 1)
-  else:
-    write s, $val
+  write s, $val
 
 proc writeHex*(s: OutputStream, bytes: openArray[byte]) =
   const hexChars = "0123456789abcdef"
