@@ -1,7 +1,7 @@
 mode = ScriptMode.Verbose
 
 packageName   = "faststreams"
-version       = "0.4.1"
+version       = "0.5.0"
 author        = "Status Research & Development GmbH"
 description   = "Nearly zero-overhead input/output streams for Nim"
 license       = "Apache License 2.0"
