@@ -1,6 +1,10 @@
 {.used.}
 
-import unittest2, ../faststreams
+import os, unittest2, ../faststreams
+
+const
+  asciiTableFile = "files" / "ascii_table.txt"
+  asciiTableFileAbsolute = currentSourcePath().parentDir / asciiTableFile
 
 proc readAll(s: InputStream): string =
   while s.readable:
@@ -112,6 +116,58 @@ suite "Inputs":
     let s = unsafeMemoryInput(text)
     for i in 0 ..< text.len:
       check s.read() == text[i].byte
+
+  dualTest "memFileInput relative path":
+    let s = memFileInput(asciiTableFile)
+    discard s.read()
+    s.close()
+
+  dualTest "memFileInput absolute path":
+    let s = memFileInput(asciiTableFileAbsolute)
+    discard s.read()
+    s.close()
+
+  dualTest "memFileInput content":
+    const input = staticRead(asciiTableFileAbsolute)
+    let ss = memoryInput(input)
+    let s = memFileInput(asciiTableFileAbsolute)
+    while readable(s):
+      check s.read == ss.read
+    check(not readable(ss))
+    s.close()
+
+  staticTest "memFileInput offset":
+    const input = staticRead(asciiTableFileAbsolute)
+    let ss = memoryInput(input)
+    let offset = 10
+    let s = memFileInput(asciiTableFileAbsolute, offset = offset)
+    ss.advance offset
+    while readable(s):
+      check s.read == ss.read
+    check(not readable(ss))
+    s.close()
+
+  staticTest "memFileInput mappedSize":
+    const input = staticRead(asciiTableFileAbsolute)
+    let ss = memoryInput(input)
+    let mappedSize = 10
+    let s = memFileInput(asciiTableFileAbsolute, mappedSize = mappedSize)
+    while readable(s):
+      check s.read == ss.read
+    check s.pos == mappedSize
+    s.close()
+
+  staticTest "memFileInput offset & mappedSize":
+    const input = staticRead(asciiTableFileAbsolute)
+    let ss = memoryInput(input)
+    let offset = 10
+    let mappedSize = 10
+    let s = memFileInput(asciiTableFileAbsolute, mappedSize, offset)
+    ss.advance offset
+    while readable(s):
+      check s.read == ss.read
+    check ss.pos == offset + mappedSize
+    s.close()
 
 suite "Outputs":
   dualTest "write byte":

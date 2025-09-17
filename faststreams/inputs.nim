@@ -1,6 +1,6 @@
 import
-  os, memfiles, options,
-  stew/[ptrops],
+  os, memfiles, options, macros,
+  stew/[ptrops, byteutils],
   async_backend, buffers
 
 export
@@ -219,6 +219,21 @@ const memFileInputVTable = InputStreamVTable(
     some s.span.len
 )
 
+proc vmFileInput(filename: string, mappedSize = -1, offset = 0): InputStreamHandle =
+  let path = if filename.isAbsolute():
+    filename
+  else:
+    getProjectPath() / filename
+  let input = staticRead(path)
+  let endPos = if mappedSize >= 0:
+    min(input.len, offset + mappedSize)
+  else:
+    input.len
+  let startPos = min(input.len, offset)
+  return makeHandle VmInputStream(
+    data: toBytes(toOpenArray(input, startPos, endPos-1)), pos: 0
+  )
+
 proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHandle
                   {.raises: [IOError].} =
   ## Creates an input stream for reading the contents of a memory-mapped file.
@@ -238,31 +253,34 @@ proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHa
   ## ``offset`` must be multiples of the PAGE SIZE of your OS
   ##  (usually 4K or 8K, but is unique to your OS)
 
-  # Nim's memfiles module will fail to map an empty file,
-  # but we don't consider this a problem. The stream will
-  # be in non-readable state from the start.
-  try:
-    let fileSize = getFileSize(filename)
-    if fileSize == 0:
-      return makeHandle InputStream()
+  when nimvm:
+    return vmFileInput(filename, mappedSize, offset)
+  else:
+    # Nim's memfiles module will fail to map an empty file,
+    # but we don't consider this a problem. The stream will
+    # be in non-readable state from the start.
+    try:
+      let fileSize = getFileSize(filename)
+      if fileSize == 0:
+        return makeHandle InputStream()
 
-    let
-      memFile = memfiles.open(filename,
-                              mode = fmRead,
-                              mappedSize = mappedSize,
-                              offset = offset)
-      head = cast[ptr byte](memFile.mem)
-      mappedSize = memFile.size
+      let
+        memFile = memfiles.open(filename,
+                                mode = fmRead,
+                                mappedSize = mappedSize,
+                                offset = offset)
+        head = cast[ptr byte](memFile.mem)
+        mappedSize = memFile.size
 
-    makeHandle MemFileInputStream(
-      vtable: vtableAddr memFileInputVTable,
-      span: PageSpan(
-        startAddr: head,
-        endAddr: offset(head, mappedSize)),
-      spanEndPos: mappedSize,
-      file: memFile)
-  except OSError as err:
-    raise newException(IOError, err.msg, err)
+      return makeHandle MemFileInputStream(
+        vtable: vtableAddr memFileInputVTable,
+        span: PageSpan(
+          startAddr: head,
+          endAddr: offset(head, mappedSize)),
+        spanEndPos: mappedSize,
+        file: memFile)
+    except OSError as err:
+      raise newException(IOError, err.msg, err)
 
 func getNewSpan(s: InputStream) =
   fsAssert s.buffers != nil
