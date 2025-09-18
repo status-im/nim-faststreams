@@ -99,6 +99,7 @@ template writeText*(s: OutputStream, str: string) =
   write s, str
 
 template writeText*(s: OutputStream, val: auto) =
+  # TODO https://github.com/nim-lang/Nim/issues/25166
   when val is SomeFloat:
     var buffer: array[65, char]
     let blen = writeFloatToBufferRoundtrip(buffer, val)
