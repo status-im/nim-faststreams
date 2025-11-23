@@ -483,8 +483,12 @@ template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp:
 proc writeToNewSpan(s: OutputStream, b: byte) =
   writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
 
-iterator evalOutputStreamOnceImpl(sp: OutputStream): lent OutputStream =
-  yield sp
+when (defined(gcOrc) or defined(gcArc)) and (NimMajor, NimMinor) >= (2, 2):
+  iterator evalOutputStreamOnceImpl(sp: OutputStream): lent OutputStream =
+    yield sp
+else:
+  iterator evalOutputStreamOnceImpl(sp: OutputStream): OutputStream =
+    yield sp
 
 template evalOutputStreamOnce(sp, name, body: untyped) =
   for name in evalOutputStreamOnceImpl(sp):

@@ -592,8 +592,12 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
-iterator evalInputStreamOnceImpl(sp: InputStream): lent InputStream =
-  yield sp
+when (defined(gcOrc) or defined(gcArc)) and (NimMajor, NimMinor) >= (2, 2):
+  iterator evalInputStreamOnceImpl(sp: InputStream): lent InputStream =
+    yield sp
+else:
+  iterator evalInputStreamOnceImpl(sp: InputStream): InputStream =
+    yield sp
 
 template evalInputStreamOnce(sp, name, body: untyped) =
   for name in evalInputStreamOnceImpl(sp):
