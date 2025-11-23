@@ -193,8 +193,7 @@ converter implicitDeref*(h: OutputStreamHandle): OutputStream =
   h.s
 
 template makeHandle*(sp: OutputStream): OutputStreamHandle =
-  let s = sp
-  OutputStreamHandle(s: s)
+  OutputStreamHandle(s: sp)
 
 proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
   when nimvm:
@@ -484,15 +483,14 @@ template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp:
 proc writeToNewSpan(s: OutputStream, b: byte) =
   writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
 
-template write*(sp: OutputStream, b: byte) =
+proc write*(sp: OutputStream, b: byte) {.inline.} =
   when nimvm:
     VmOutputStream(sp).data.add(b)
   else:
-    let s = sp
-    if hasRunway(s.span):
-      write(s.span, b)
+    if hasRunway(sp.span):
+      write(sp.span, b)
     else:
-      writeToNewSpan(s, b)
+      writeToNewSpan(sp, b)
 
 when fsAsyncSupport:
   proc write*(sp: AsyncOutputStream, b: byte) =

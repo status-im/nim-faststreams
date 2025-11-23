@@ -592,7 +592,7 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
-template readable*(sp: InputStream): bool =
+proc readable*(sp: InputStream): bool {.inline.} =
   ## Checks whether reading more data from the stream is possible.
   ##
   ## If there is any unconsumed data in the stream buffers, the
@@ -635,8 +635,7 @@ template readable*(sp: InputStream): bool =
   when nimvm:
     VmInputStream(sp).pos < VmInputStream(sp).data.len
   else:
-    let s = sp
-    hasRunway(s.span) or bufferMoreDataSync(s)
+    hasRunway(sp.span) or bufferMoreDataSync(sp)
 
 when fsAsyncSupport:
   template readable*(sp: AsyncInputStream): bool =
@@ -735,16 +734,15 @@ template peek(s: VmInputStream): byte =
   doAssert s.pos < s.data.len
   s.data[s.pos]
 
-template peek*(sp: InputStream): byte =
+func peek*(sp: InputStream): byte {.inline.} =
   when nimvm:
     peek(VmInputStream(sp))
   else:
-    let s = sp
-    if hasRunway(s.span):
-      s.span.startAddr[]
+    if hasRunway(sp.span):
+      sp.span.startAddr[]
     else:
-      getNewSpanOrDieTrying s
-      s.span.startAddr[]
+      getNewSpanOrDieTrying sp
+      sp.span.startAddr[]
 
 when fsAsyncSupport:
   template peek*(s: AsyncInputStream): byte =
@@ -759,15 +757,14 @@ template read(s: VmInputStream): byte =
   inc s.pos
   s.data[s.pos-1]
 
-template read*(sp: InputStream): byte =
+func read*(sp: InputStream): byte {.inline.} =
   when nimvm:
     read(VmInputStream(sp))
   else:
-    let s = sp
-    if hasRunway(s.span):
-      s.span.read()
+    if hasRunway(sp.span):
+      sp.span.read()
     else:
-      readFromNewSpan s
+      readFromNewSpan sp
 
 when fsAsyncSupport:
   template read*(s: AsyncInputStream): byte =
