@@ -1,6 +1,6 @@
 import
   os, memfiles, options,
-  stew/[ptrops],
+  stew/[ptrops, templateutils],
   async_backend, buffers
 
 export
@@ -592,7 +592,7 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
-proc readable*(sp: InputStream): bool {.inline.} =
+template readable*(sp: InputStream): bool =
   ## Checks whether reading more data from the stream is possible.
   ##
   ## If there is any unconsumed data in the stream buffers, the
@@ -633,9 +633,13 @@ proc readable*(sp: InputStream): bool {.inline.} =
   # inlined at the call sites. Only if it fails, we call into the
   # larger non-inlined proc:
   when nimvm:
-    VmInputStream(sp).pos < VmInputStream(sp).data.len
+    let svm = sp
+    VmInputStream(svm).pos < VmInputStream(svm).data.len
   else:
-    hasRunway(sp.span) or bufferMoreDataSync(sp)
+    var ret = false
+    evalTemplateParamOnce(sp, s):
+      ret = hasRunway(s.span) or bufferMoreDataSync(s)
+    ret
 
 when fsAsyncSupport:
   template readable*(sp: AsyncInputStream): bool =
@@ -734,15 +738,18 @@ template peek(s: VmInputStream): byte =
   doAssert s.pos < s.data.len
   s.data[s.pos]
 
-func peek*(sp: InputStream): byte {.inline.} =
+template peek*(sp: InputStream): byte =
   when nimvm:
     peek(VmInputStream(sp))
   else:
-    if hasRunway(sp.span):
-      sp.span.startAddr[]
-    else:
-      getNewSpanOrDieTrying sp
-      sp.span.startAddr[]
+    var ret: byte
+    evalTemplateParamOnce(sp, s):
+      ret = if hasRunway(s.span):
+        s.span.startAddr[]
+      else:
+        getNewSpanOrDieTrying s
+        s.span.startAddr[]
+    ret
 
 when fsAsyncSupport:
   template peek*(s: AsyncInputStream): byte =
@@ -757,14 +764,17 @@ template read(s: VmInputStream): byte =
   inc s.pos
   s.data[s.pos-1]
 
-func read*(sp: InputStream): byte {.inline.} =
+template read*(sp: InputStream): byte =
   when nimvm:
     read(VmInputStream(sp))
   else:
-    if hasRunway(sp.span):
-      sp.span.read()
-    else:
-      readFromNewSpan sp
+    var ret: byte
+    evalTemplateParamOnce(sp, s):
+      ret = if hasRunway(s.span):
+        s.span.read()
+      else:
+        readFromNewSpan s
+    ret
 
 when fsAsyncSupport:
   template read*(s: AsyncInputStream): byte =

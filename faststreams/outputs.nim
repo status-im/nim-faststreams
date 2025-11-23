@@ -8,7 +8,7 @@
 
 import
   deques, typetraits,
-  stew/[ptrops, strings],
+  stew/[ptrops, strings, templateutils],
   buffers, async_backend
 
 export
@@ -483,14 +483,15 @@ template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp:
 proc writeToNewSpan(s: OutputStream, b: byte) =
   writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
 
-proc write*(sp: OutputStream, b: byte) {.inline.} =
+template write*(sp: OutputStream, b: byte) =
   when nimvm:
     VmOutputStream(sp).data.add(b)
   else:
-    if hasRunway(sp.span):
-      write(sp.span, b)
-    else:
-      writeToNewSpan(sp, b)
+    evalTemplateParamOnce(sp, s):
+      if hasRunway(s.span):
+        write(s.span, b)
+      else:
+        writeToNewSpan(s, b)
 
 when fsAsyncSupport:
   proc write*(sp: AsyncOutputStream, b: byte) =
