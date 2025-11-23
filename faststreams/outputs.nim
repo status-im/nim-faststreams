@@ -8,7 +8,7 @@
 
 import
   deques, typetraits,
-  stew/[ptrops, strings, templateutils],
+  stew/[ptrops, strings],
   buffers, async_backend
 
 export
@@ -483,11 +483,18 @@ template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp:
 proc writeToNewSpan(s: OutputStream, b: byte) =
   writeToNewSpanImpl(s, b, noAwait, writeSync, drainAllBuffersSync)
 
+iterator evalOutputStreamOnceImpl(sp: OutputStream): lent OutputStream =
+  yield sp
+
+template evalOutputStreamOnce(sp, name, body: untyped) =
+  for name in evalOutputStreamOnceImpl(sp):
+    body
+
 template write*(sp: OutputStream, b: byte) =
   when nimvm:
     VmOutputStream(sp).data.add(b)
   else:
-    evalTemplateParamOnce(sp, s):
+    evalOutputStreamOnce(sp, s):
       if hasRunway(s.span):
         write(s.span, b)
       else:

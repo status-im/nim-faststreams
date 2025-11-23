@@ -1,6 +1,6 @@
 import
   os, memfiles, options,
-  stew/[ptrops, templateutils],
+  stew/[ptrops],
   async_backend, buffers
 
 export
@@ -592,6 +592,13 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
+iterator evalInputStreamOnceImpl(sp: InputStream): lent InputStream =
+  yield sp
+
+template evalInputStreamOnce(sp, name, body: untyped) =
+  for name in evalInputStreamOnceImpl(sp):
+    body
+
 template readable*(sp: InputStream): bool =
   ## Checks whether reading more data from the stream is possible.
   ##
@@ -637,7 +644,7 @@ template readable*(sp: InputStream): bool =
     VmInputStream(svm).pos < VmInputStream(svm).data.len
   else:
     var ret = false
-    evalTemplateParamOnce(sp, s):
+    evalInputStreamOnce(sp, s):
       ret = hasRunway(s.span) or bufferMoreDataSync(s)
     ret
 
@@ -743,7 +750,7 @@ template peek*(sp: InputStream): byte =
     peek(VmInputStream(sp))
   else:
     var ret: byte
-    evalTemplateParamOnce(sp, s):
+    evalInputStreamOnce(sp, s):
       ret = if hasRunway(s.span):
         s.span.startAddr[]
       else:
@@ -769,7 +776,7 @@ template read*(sp: InputStream): byte =
     read(VmInputStream(sp))
   else:
     var ret: byte
-    evalTemplateParamOnce(sp, s):
+    evalInputStreamOnce(sp, s):
       ret = if hasRunway(s.span):
         s.span.read()
       else:
