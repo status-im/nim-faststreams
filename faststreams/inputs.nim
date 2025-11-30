@@ -592,17 +592,6 @@ proc bufferMoreDataSync(s: InputStream): bool =
   # a template inlined in the user code).
   bufferMoreDataImpl(s, noAwait, readSync)
 
-when (defined(gcOrc) or defined(gcArc)) and (NimMajor, NimMinor) >= (2, 2):
-  iterator evalInputStreamOnceImpl(sp: InputStream): lent InputStream =
-    yield sp
-else:
-  iterator evalInputStreamOnceImpl(sp: InputStream): InputStream =
-    yield sp
-
-template evalInputStreamOnce(sp, name, body: untyped) =
-  for name in evalInputStreamOnceImpl(sp):
-    body
-
 template readable*(sp: InputStream): bool =
   ## Checks whether reading more data from the stream is possible.
   ##
@@ -647,10 +636,8 @@ template readable*(sp: InputStream): bool =
     let svm = sp
     VmInputStream(svm).pos < VmInputStream(svm).data.len
   else:
-    var ret = false
-    evalInputStreamOnce(sp, s):
-      ret = hasRunway(s.span) or bufferMoreDataSync(s)
-    ret
+    let s {.cursor.} = sp
+    hasRunway(s.span) or bufferMoreDataSync(s)
 
 when fsAsyncSupport:
   template readable*(sp: AsyncInputStream): bool =
@@ -753,14 +740,12 @@ template peek*(sp: InputStream): byte =
   when nimvm:
     peek(VmInputStream(sp))
   else:
-    var ret: byte
-    evalInputStreamOnce(sp, s):
-      ret = if hasRunway(s.span):
-        s.span.startAddr[]
-      else:
-        getNewSpanOrDieTrying s
-        s.span.startAddr[]
-    ret
+    let s {.cursor.} = sp
+    if hasRunway(s.span):
+      s.span.startAddr[]
+    else:
+      getNewSpanOrDieTrying s
+      s.span.startAddr[]
 
 when fsAsyncSupport:
   template peek*(s: AsyncInputStream): byte =
@@ -779,13 +764,11 @@ template read*(sp: InputStream): byte =
   when nimvm:
     read(VmInputStream(sp))
   else:
-    var ret: byte
-    evalInputStreamOnce(sp, s):
-      ret = if hasRunway(s.span):
-        s.span.read()
-      else:
-        readFromNewSpan s
-    ret
+    let s {.cursor.} = sp
+    if hasRunway(s.span):
+      s.span.read()
+    else:
+      readFromNewSpan s
 
 when fsAsyncSupport:
   template read*(s: AsyncInputStream): byte =
