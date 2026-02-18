@@ -633,9 +633,10 @@ template readable*(sp: InputStream): bool =
   # inlined at the call sites. Only if it fails, we call into the
   # larger non-inlined proc:
   when nimvm:
-    VmInputStream(sp).pos < VmInputStream(sp).data.len
+    let svm = sp
+    VmInputStream(svm).pos < VmInputStream(svm).data.len
   else:
-    let s = sp
+    let s {.cursor.} = sp
     hasRunway(s.span) or bufferMoreDataSync(s)
 
 when fsAsyncSupport:
@@ -739,7 +740,7 @@ template peek*(sp: InputStream): byte =
   when nimvm:
     peek(VmInputStream(sp))
   else:
-    let s = sp
+    let s {.cursor.} = sp
     if hasRunway(s.span):
       s.span.startAddr[]
     else:
@@ -763,7 +764,7 @@ template read*(sp: InputStream): byte =
   when nimvm:
     read(VmInputStream(sp))
   else:
-    let s = sp
+    let s {.cursor.} = sp
     if hasRunway(s.span):
       s.span.read()
     else:

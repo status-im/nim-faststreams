@@ -193,8 +193,7 @@ converter implicitDeref*(h: OutputStreamHandle): OutputStream =
   h.s
 
 template makeHandle*(sp: OutputStream): OutputStreamHandle =
-  let s = sp
-  OutputStreamHandle(s: s)
+  OutputStreamHandle(s: sp)
 
 proc memoryOutput*(pageSize = defaultPageSize): OutputStreamHandle =
   when nimvm:
@@ -488,7 +487,7 @@ template write*(sp: OutputStream, b: byte) =
   when nimvm:
     VmOutputStream(sp).data.add(b)
   else:
-    let s = sp
+    let s {.cursor.} = sp
     if hasRunway(s.span):
       write(s.span, b)
     else:
