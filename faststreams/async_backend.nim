@@ -15,7 +15,7 @@ type
 
 const
   debugHelpers* = defined(debugHelpers)
-  fsAsyncSupport* = asyncBackend != "none"
+  fsAsyncSupport* = false
 
 when asyncBackend == "none":
   discard
