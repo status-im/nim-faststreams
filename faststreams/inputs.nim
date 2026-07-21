@@ -1,5 +1,10 @@
+const fsMemFilesSupport* = not defined(`any`) and not defined(standalone)
+
+when fsMemFilesSupport:
+  import os, memfiles
+
 import
-  os, memfiles, options,
+  options,
   stew/[ptrops],
   async_backend, buffers
 
@@ -71,15 +76,17 @@ type
   InputStreamHandle* = object
     s*: InputStream
 
-  MemFileInputStream = ref object of InputStream
-    file: MemFile
-
   FileInputStream = ref object of InputStream
     file: File
 
   VmInputStream = ref object of InputStream
     data: seq[byte]
     pos: int
+
+when fsMemFilesSupport:
+  type
+    MemFileInputStream = ref object of InputStream
+      file: MemFile
 
 template Sync*(s: InputStream): InputStream = s
 
@@ -208,61 +215,62 @@ template vtableAddr*(vtable: InputStreamVTable): ptr InputStreamVTable =
     {.noSideEffect.}:
       unsafeAddr vtable2
 
-const memFileInputVTable = InputStreamVTable(
-  closeSync: proc (s: InputStream) =
+when fsMemFilesSupport:
+  const memFileInputVTable = InputStreamVTable(
+    closeSync: proc (s: InputStream) =
+      try:
+        close MemFileInputStream(s).file
+      except OSError as err:
+        raise newException(IOError, "Failed to close file", err)
+    ,
+    getLenSync: func (s: InputStream): Option[Natural] =
+      some s.span.len
+  )
+
+  proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHandle
+                    {.raises: [IOError].} =
+    ## Creates an input stream for reading the contents of a memory-mapped file.
+    ##
+    ## Using this API will provide better performance than `fileInput`,
+    ## but this comes at a cost of higher address space usage which may
+    ## be problematic when working with extremely large files.
+    ##
+    ## All parameters are forwarded to Nim's memfiles.open function:
+    ##
+    ## ``filename``
+    ##  The name of the file to read.
+    ##
+    ## ``mappedSize`` and ``offset``
+    ##  can be used to map only a slice of the file.
+    ##
+    ## ``offset`` must be multiples of the PAGE SIZE of your OS
+    ##  (usually 4K or 8K, but is unique to your OS)
+
+    # Nim's memfiles module will fail to map an empty file,
+    # but we don't consider this a problem. The stream will
+    # be in non-readable state from the start.
     try:
-      close MemFileInputStream(s).file
+      let fileSize = getFileSize(filename)
+      if fileSize == 0:
+        return makeHandle InputStream()
+
+      let
+        memFile = memfiles.open(filename,
+                                mode = fmRead,
+                                mappedSize = mappedSize,
+                                offset = offset)
+        head = cast[ptr byte](memFile.mem)
+        mappedSize = memFile.size
+
+      makeHandle MemFileInputStream(
+        vtable: vtableAddr memFileInputVTable,
+        span: PageSpan(
+          startAddr: head,
+          endAddr: offset(head, mappedSize)),
+        spanEndPos: mappedSize,
+        file: memFile)
     except OSError as err:
-      raise newException(IOError, "Failed to close file", err)
-  ,
-  getLenSync: func (s: InputStream): Option[Natural] =
-    some s.span.len
-)
-
-proc memFileInput*(filename: string, mappedSize = -1, offset = 0): InputStreamHandle
-                  {.raises: [IOError].} =
-  ## Creates an input stream for reading the contents of a memory-mapped file.
-  ##
-  ## Using this API will provide better performance than `fileInput`,
-  ## but this comes at a cost of higher address space usage which may
-  ## be problematic when working with extremely large files.
-  ##
-  ## All parameters are forwarded to Nim's memfiles.open function:
-  ##
-  ## ``filename``
-  ##  The name of the file to read.
-  ##
-  ## ``mappedSize`` and ``offset``
-  ##  can be used to map only a slice of the file.
-  ##
-  ## ``offset`` must be multiples of the PAGE SIZE of your OS
-  ##  (usually 4K or 8K, but is unique to your OS)
-
-  # Nim's memfiles module will fail to map an empty file,
-  # but we don't consider this a problem. The stream will
-  # be in non-readable state from the start.
-  try:
-    let fileSize = getFileSize(filename)
-    if fileSize == 0:
-      return makeHandle InputStream()
-
-    let
-      memFile = memfiles.open(filename,
-                              mode = fmRead,
-                              mappedSize = mappedSize,
-                              offset = offset)
-      head = cast[ptr byte](memFile.mem)
-      mappedSize = memFile.size
-
-    makeHandle MemFileInputStream(
-      vtable: vtableAddr memFileInputVTable,
-      span: PageSpan(
-        startAddr: head,
-        endAddr: offset(head, mappedSize)),
-      spanEndPos: mappedSize,
-      file: memFile)
-  except OSError as err:
-    raise newException(IOError, err.msg, err)
+      raise newException(IOError, err.msg, err)
 
 func getNewSpan(s: InputStream) =
   fsAssert s.buffers != nil
