@@ -133,3 +133,14 @@ suite "Outputs":
     let s = memoryOutput()
     s.write("ab")
     check s.getOutput(string) == "ab"
+
+  dualTest "pos":
+    let s = memoryOutput()
+    check s.pos == 0
+    s.write("a")
+    check s.pos == 1
+    s.write("b")
+    check s.pos == 2
+    s.write("cd")
+    check s.pos == 4
+    check s.getOutput(string) == "abcd"

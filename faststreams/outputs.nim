@@ -329,7 +329,10 @@ proc fileOutput*(filename: string,
   fileOutput(open(filename, fileMode), pageSize, allowAsyncOps)
 
 proc pos*(s: OutputStream): int =
-  s.spanEndPos - s.span.len
+  when nimvm:
+    VmOutputStream(s).data.len
+  else:
+    s.spanEndPos - s.span.len
 
 when fsAsyncSupport:
   template pos*(s: AsyncOutputStream): int =
