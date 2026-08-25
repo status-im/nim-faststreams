@@ -1,15 +1,15 @@
 mode = ScriptMode.Verbose
 
 packageName   = "faststreams"
-version       = "0.5.1"
+version       = "0.5.2"
 author        = "Status Research & Development GmbH"
 description   = "Nearly zero-overhead input/output streams for Nim"
 license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
-requires "nim >= 1.6.0",
-         "stew >= 0.2.0",
-         "unittest2"
+requires "nim >= 1.6.18",
+         "stew >= 0.5.0",
+         "unittest2 >= 0.2.5"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
