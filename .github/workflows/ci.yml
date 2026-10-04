@@ -11,6 +11,7 @@ jobs:
     uses: status-im/nimbus-common-workflow/.github/workflows/common.yml@main
     with:
       test-command: |
-        env NIMLANG=c nimble test
+        nimble test_asan
+        nimble test
         nimble install chronos
-        env NIMLANG=c nimble testChronos || true
+        nimble testChronos || true
