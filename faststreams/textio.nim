@@ -4,10 +4,7 @@ import
 
 from std/strutils import Digits, Newlines
 
-when (NimMajor, NimMinor) < (2, 0):
-  import system/formatfloat
-else:
-  import std/formatfloat
+import std/formatfloat
 
 
 template matchingIntType(T: type int64): type = uint64

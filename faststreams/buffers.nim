@@ -1,6 +1,7 @@
 import
   std/[deques, options],
   stew/ptrops,
+  stew/shims/sequninit,
   async_backend
 
 export
@@ -92,10 +93,6 @@ const
   defaultPageSize* = 4096 - nimAllocatorMetadataSize
   maxStackUsage* = 16384
 
-when not declared(newSeqUninit): # nim 2.2+
-  template newSeqUninit[T: byte](len: int): seq[byte] =
-    newSeqUninitialized[byte](len)
-
 when debugHelpers:
   proc describeBuffers*(context: static string, buffers: PageBuffers) =
     debugEcho context, " :: buffers"
@@ -166,7 +163,7 @@ func read*(span: var PageSpan, val: var openArray[byte]) {.inline.} =
 
 func write*(span: var PageSpan, val: openArray[byte]) {.inline.} =
   if val.len > 0: # avoid accessing addr val[0] when it's empty
-    copyMem(span.startAddr, unsafeAddr val[0], val.len)
+    copyMem(span.startAddr, addr val[0], val.len)
     span.advance(val.len)
 
 template write*(span: var PageSpan, val: byte) =
