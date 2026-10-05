@@ -1,15 +1,15 @@
 mode = ScriptMode.Verbose
 
 packageName   = "faststreams"
-version       = "0.5.2"
+version       = "0.6.0"
 author        = "Status Research & Development GmbH"
 description   = "Nearly zero-overhead input/output streams for Nim"
 license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
-requires "nim >= 1.6.18",
-         "stew >= 0.5.0",
-         "unittest2 >= 0.2.5"
+requires "nim >= 2.0.14",
+         "stew >= 0.6.0",
+         "unittest2 >= 0.3.0"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
@@ -43,13 +43,12 @@ task test, "Run all tests":
     for threads in ["--threads:off", "--threads:on"]:
       for args in testArguments:
         run backend & " " & threads & " " & args & " --mm:refc", "tests/all_tests"
-        if (NimMajor, NimMinor) >= (2, 0):
-          run backend & " " & threads & " " & args & " --mm:orc", "tests/all_tests"
+        run backend & " " & threads & " " & args & " --mm:orc", "tests/all_tests"
 
       # Nim CI runs `nimble test` as part of its important packages,
       # keep ASAN here as well so that Nim regressions are caught
       # https://github.com/nim-lang/Nim/blob/devel/testament/important_packages.nim
-      if (NimMajor, NimMinor) >= (2, 2) and defined(linux) and defined(amd64):
+      if defined(linux) and defined(amd64):
         run backend & " " & threads &
           " -d:danger --mm:orc -d:useMalloc --cc:clang --debugger:native" &
           " --passC:-fsanitize=address --passL:-fsanitize=address",
@@ -61,11 +60,10 @@ task testChronos, "Run chronos tests":
     for threads in ["--threads:off", "--threads:on"]:
       for args in testArguments:
         run backend & " " & threads & " " & args & " --mm:refc", "tests/all_tests"
-        if (NimMajor, NimMinor) >= (2, 0):
-          run backend & " " & threads & " " & args & " --mm:orc", "tests/all_tests"
+        run backend & " " & threads & " " & args & " --mm:orc", "tests/all_tests"
 
 task test_asan, "Run all tests with ASAN":
-  if platform != "x86" and (NimMajor, NimMinor) >= (2, 2):
+  if platform != "x86":
     try:
       exec "echo '#if __clang_major__ < 20\n#error\n#endif' | clang -E - >/dev/null"
     except OSError:

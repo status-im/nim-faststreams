@@ -9,16 +9,13 @@
 import
   deques, typetraits,
   stew/[ptrops, strings],
+  stew/shims/sequninit,
   buffers, async_backend
 
 export
   buffers, CloseBehavior
 
 {.pragma: iocall, nimcall, gcsafe, raises: [IOError].}
-
-when not declared(newSeqUninit): # nim 2.2+
-  template newSeqUninit[T: byte](len: int): seq[byte] =
-    newSeqUninitialized[byte](len)
 
 when fsAsyncSupport:
   # Circular type refs prevent more targeted `when`
@@ -304,12 +301,7 @@ else:
 
 template vtableAddr*(vtable: OutputStreamVTable): ptr OutputStreamVTable =
   # https://github.com/nim-lang/Nim/issues/22389
-  when (NimMajor, NimMinor, NimPatch) >= (2, 0, 12):
-    addr vtable
-  else:
-    let vtable2 {.global.} = vtable
-    {.noSideEffect.}:
-      unsafeAddr vtable2
+  addr vtable
 
 proc fileOutput*(f: File,
                  pageSize = defaultPageSize,
@@ -468,7 +460,7 @@ template writeToNewSpanImpl(s: OutputStream, b: byte, awaiter, writeOp, drainOp:
     fsAssert s.vtable != nil # This is an unsafe memory output and we've reached
                              # the end of the buffer which is range violation defect
     fsAssert s.vtable.writeOp != nil
-    awaiter s.vtable.writeOp(s, unsafeAddr b, 1)
+    awaiter s.vtable.writeOp(s, addr b, 1)
   elif s.vtable == nil or s.extCursorsCount > 0:
     # This is the main cursor of a stream, but we are either not
     # ready to flush due to outstanding delayed writes or this is
@@ -573,7 +565,7 @@ proc write*(s: OutputStream, value: cstring) =
 template memCopyToBytes(value: auto): untyped =
   type T = type(value)
   static: assert supportsCopyMem(T)
-  let valueAddr = unsafeAddr value
+  let valueAddr = addr value
   makeOpenArray(cast[ptr byte](valueAddr), sizeof(T))
 
 proc writeMemCopy*(s: OutputStream, value: auto) =
@@ -759,11 +751,8 @@ proc getOutput*(s: OutputStream, T: type string): string =
     s.spanEndPos = 0
 
     for span in s.buffers.consumeAll():
-      when compiles(span.data().toOpenArrayChar(0, len - 1)):
-        result.add span.data().toOpenArrayChar(0, len - 1)
-      else:
-        let p = cast[ptr char](span.startAddr)
-        result.add makeOpenArray(p, span.len)
+      let p = cast[ptr char](span.startAddr)
+      result.add makeOpenArray(p, span.len)
 
 proc getOutput*(s: OutputStream, T: type seq[byte]): seq[byte] =
   ## Consume data written so far to the in-memory page buffer - this operation

@@ -254,7 +254,7 @@ suite "output stream":
 
 proc writeBlock(data: openArray[byte], output: var openArray[byte]): int =
   doAssert data.len <= output.len
-  copyMem(unsafeAddr output[0], unsafeAddr data[0], data.len)
+  copyMem(addr output[0], addr data[0], data.len)
   data.len
 
 suite "randomized tests":
