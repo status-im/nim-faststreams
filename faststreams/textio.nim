@@ -3,6 +3,7 @@ import
   inputs, outputs, buffers, async_backend, multisync
 
 from std/strutils import Digits, Newlines
+from stew/byteutils import toHex
 
 import std/formatfloat
 
@@ -105,11 +106,7 @@ template writeText*(s: OutputStream, val: auto) =
     write s, $val
 
 proc writeHex*(s: OutputStream, bytes: openArray[byte]) =
-  const hexChars = "0123456789abcdef"
-
-  for b in bytes:
-    s.write hexChars[int b shr 4 and 0xF]
-    s.write hexChars[int b and 0xF]
+  s.write bytes.toHex
 
 proc writeHex*(s: OutputStream, chars: openArray[char]) =
   writeHex s, chars.toOpenArrayByte(0, chars.high())
